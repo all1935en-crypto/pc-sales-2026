@@ -1,0 +1,129 @@
+{
+    "terminal.integrated.copyOnSelection": true,
+    // 關掉語意高亮，避免顏色被主題搶回去
+    "editor.semanticHighlighting.enabled": false,
+    // 字體與行距（偏閱讀）
+    "editor.fontSize": 12,
+    "editor.lineHeight": 22,
+    // Markdown 預覽
+    "markdown.preview.fontSize": 15,
+    "markdown.preview.lineHeight": 1.7,
+    // ===== UI 顏色（外框、背景）=====
+    "workbench.colorCustomizations": {
+        // 編輯器背景
+        "editor.background": "#F3F4F1",
+        "editor.foreground": "#1c1c1e",
+        // Sidebar
+        "sideBar.background": "#ffffff",
+        "sideBar.foreground": "#1c1c1e",
+        "sideBar.border": "#ececec",
+        // Sidebar 區塊標題
+        "sideBarSectionHeader.background": "#ffffff",
+        "sideBarSectionHeader.foreground": "#1c1c1e",
+        "sideBarTitle.foreground": "#1c1c1e",
+        // Activity Bar
+        "activityBar.background": "#ffffff",
+        "activityBar.foreground": "#1c1c1e",
+        "activityBar.inactiveForeground": "#6e6e73",
+        "activityBar.border": "#ececec",
+        "activityBar.activeBorder": "#e5e5ea",
+        // Tab
+        "tab.activeBackground": "#ffffff",
+        "tab.inactiveBackground": "#fbfbfb",
+        "tab.border": "#ececec",
+        // Editor Group
+        "editorGroup.border": "#ececec",
+        "editorGroup.focusedEmptyBorder": "#e5e5ea",
+        // List / Tree（檔案樹）
+        "list.activeSelectionBackground": "#f5f5f7",
+        "list.inactiveSelectionBackground": "#f5f5f7",
+        "list.hoverBackground": "#fbfbfb",
+        "list.focusBackground": "#f5f5f7",
+        "list.activeSelectionForeground": "#1c1c1e",
+        "list.inactiveSelectionForeground": "#1c1c1e",
+        "list.hoverForeground": "#1c1c1e",
+        // 剩餘紫色來源（VS Code 能控制的極限）
+        "list.activeSelectionBorder": "#e5e5ea",
+        "list.inactiveSelectionBorder": "#e5e5ea",
+        "list.focusOutline": "#e5e5ea",
+        "list.focusAndSelectionOutline": "#e5e5ea",
+        "focusBorder": "#e5e5ea",
+        // Title Bar
+        "titleBar.activeBackground": "#ffffff",
+        "titleBar.inactiveBackground": "#ffffff",
+        "titleBar.border": "#ececec",
+        // Status Bar
+        "statusBar.background": "#ffffff",
+        "statusBar.foreground": "#1c1c1e",
+        "statusBar.border": "#ececec",
+        "statusBar.noFolderBackground": "#ffffff",
+        // ===== Chat / Markdown code block 外框 =====
+        "textCodeBlock.border": "#d1d1d6",
+        "chat.codeBlockBorder": "#d1d1d6"
+    },
+    // ===== 語法顏色（覆寫 Quiet Light）=====
+    "editor.tokenColorCustomizations": {
+        "textMateRules": [
+            {
+                // Markdown 標題（# / ## / ###）
+                "scope": [
+                    "markup.heading.markdown",
+                    "entity.name.section.markdown"
+                ],
+                "settings": {
+                    "foreground": "#5676a0"
+                }
+            },
+            {
+                // 註解
+                "scope": [
+                    "comment"
+                ],
+                "settings": {
+                    "foreground": "#5676a0"
+                }
+            },
+            {
+                // Key（editor.fontSize 這類）
+                "scope": [
+                    "variable.other.key",
+                    "support.type.property-name"
+                ],
+                "settings": {
+                    "foreground": "#1c1c1e"
+                }
+            },
+            {
+                // 字串
+                "scope": [
+                    "string"
+                ],
+                "settings": {
+                    "foreground": "#1c1c1e"
+                }
+            },
+            {
+                // 數字
+                "scope": [
+                    "constant.numeric"
+                ],
+                "settings": {
+                    "foreground": "#3a3a3c"
+                }
+            },
+            // =====【新增】壓掉 Markdown 偏黃色語意區塊 =====
+            {
+                "scope": [
+                    "markup.list.markdown",
+                    "markup.bold.markdown",
+                    "markup.quote.markdown",
+                    "markup.inline.raw.markdown",
+                    "markup.changed.markdown"
+                ],
+                "settings": {
+                    "foreground": "#1c1c1e"
+                }
+            }
+        ]
+    }
+}

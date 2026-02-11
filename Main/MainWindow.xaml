@@ -1,0 +1,169 @@
+<Window x:Class="Main.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        Title="開發初始設定"
+        Width="480"
+        Height="900"
+        WindowStartupLocation="CenterScreen"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        FontFamily="Segoe UI"
+        TextOptions.TextFormattingMode="Display"
+        TextOptions.TextRenderingMode="ClearType"
+        TextOptions.TextHintingMode="Fixed"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True">
+    <Window.Resources>
+        <Style x:Key="PrimaryButtonStyle" TargetType="Button">
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="Background" Value="#0A84FF" />
+            <Setter Property="Padding" Value="26,12" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                CornerRadius="12"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              Margin="{TemplateBinding Padding}" />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="SecondaryButtonStyle" TargetType="Button">
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Foreground" Value="#1C1C1E" />
+            <Setter Property="Background" Value="White" />
+            <Setter Property="Padding" Value="26,12" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="BorderBrush" Value="#D1D1D6" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="12"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              Margin="{TemplateBinding Padding}" />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="WindowControlButtonStyle" TargetType="Button">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6"
+                                Width="{TemplateBinding Width}"
+                                Height="{TemplateBinding Height}" />
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+    <Grid>
+        <Border CornerRadius="18"
+                Background="#F2F2F2"
+                BorderBrush="#D1D1D6"
+                BorderThickness="1"
+                PreviewMouseLeftButtonDown="OnWindowMouseDown">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel Margin="36,24,36,16">
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,16" Background="Transparent">
+                        <Button Width="12"
+                                Height="12"
+                                Background="#FF5F57"
+                                BorderBrush="#E0443E"
+                                BorderThickness="1"
+                                Padding="0"
+                                Style="{StaticResource WindowControlButtonStyle}"
+                                Click="OnCloseClick"
+                                Margin="0,0,6,0" />
+                        <Button Width="12"
+                                Height="12"
+                                Background="#FFBD2E"
+                                BorderBrush="#D9A423"
+                                BorderThickness="1"
+                                Padding="0"
+                                Style="{StaticResource WindowControlButtonStyle}"
+                                Click="OnMinimizeClick"
+                                Margin="0,0,6,0" />
+                        <Button Width="12"
+                                Height="12"
+                                Background="#28C840"
+                                BorderBrush="#1FA233"
+                                BorderThickness="1"
+                                Padding="0"
+                                Style="{StaticResource WindowControlButtonStyle}"
+                                Click="OnMaximizeClick" />
+                    </StackPanel>
+
+					<TextBlock Text="程式名稱"
+                               FontSize="28"
+                               FontWeight="Bold"
+                               Foreground="#1C1C1E"
+                               HorizontalAlignment="Center"
+                               Margin="24,0,24,16" />
+
+                    <Border Background="White"
+                            CornerRadius="16"
+                            Padding="16"
+                            Margin="0,0,0,16"
+                            BorderThickness="1"
+                            BorderBrush="#ECECEC">
+                        <StackPanel>
+                            <TextBlock Text="區塊標題"
+                                       FontSize="16"
+                                       FontWeight="SemiBold"
+                                       Margin="0,0,0,8" />
+                            <TextBlock Text="這是一段描述文字，用來說明區塊內容。"
+                                       FontSize="13"
+                                       Foreground="#6E6E73"
+                                       Margin="28,0,0,8"
+                                       TextWrapping="Wrap" />
+                            <TextBox Height="32"
+                                     Padding="8,4"
+                                     Background="White"
+                                     BorderThickness="1"
+                                     BorderBrush="#D1D1D6"
+                                     Text=""
+                                     Margin="0,0,0,12" />
+                        </StackPanel>
+                    </Border>
+
+                    <StackPanel Orientation="Horizontal"
+                                HorizontalAlignment="Center"
+                                Margin="0,24,0,16">
+                        <Button Content="主要動作"
+                                Style="{StaticResource PrimaryButtonStyle}"
+                                FontSize="16"
+                                Padding="34,10"
+                                Margin="0,0,12,0" />
+                        <Button Content="次要動作"
+                                Style="{StaticResource SecondaryButtonStyle}"
+                                FontSize="16"
+                                Padding="34,10" />
+                    </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+    </Grid>
+</Window>
