@@ -22,3 +22,8 @@ logs/
 # Visual Studio / Rider
 .idea/
 *.DotSettings.user
+
+# Sensitive or large local-only files
+ChromeProfile/
+credentials.json
+mail.json

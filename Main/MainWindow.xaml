@@ -6,7 +6,7 @@
         mc:Ignorable="d"
         Title="開發初始設定"
         Width="480"
-        Height="900"
+        Height="500"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None"
         AllowsTransparency="True"
@@ -116,7 +116,7 @@
                                 Click="OnMaximizeClick" />
                     </StackPanel>
 
-					<TextBlock Text="程式名稱"
+					<TextBlock Text="2026年PC銷量自動化"
                                FontSize="28"
                                FontWeight="Bold"
                                Foreground="#1C1C1E"
@@ -130,37 +130,93 @@
                             BorderThickness="1"
                             BorderBrush="#ECECEC">
                         <StackPanel>
-                            <TextBlock Text="區塊標題"
+                            <TextBlock Text="搜尋排名"
                                        FontSize="16"
                                        FontWeight="SemiBold"
                                        Margin="0,0,0,8" />
-                            <TextBlock Text="這是一段描述文字，用來說明區塊內容。"
-                                       FontSize="13"
-                                       Foreground="#6E6E73"
-                                       Margin="28,0,0,8"
-                                       TextWrapping="Wrap" />
-                            <TextBox Height="32"
-                                     Padding="8,4"
-                                     Background="White"
-                                     BorderThickness="1"
-                                     BorderBrush="#D1D1D6"
-                                     Text=""
-                                     Margin="0,0,0,12" />
+                            
+                            <StackPanel Orientation="Horizontal" Width="309">
+                                <TextBlock Text="最大頁數"
+                                           FontSize="13"
+                                           Foreground="#6E6E73"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,12,0" />
+                                <ComboBox x:Name="MaxPagesCombo"
+                                          Height="32"
+                                          MinWidth="120"
+                                          Padding="8,4"
+                                          Background="White"
+                                          BorderBrush="#D1D1D6"
+                                          BorderThickness="1"
+                                          VerticalContentAlignment="Center" />
+                            </StackPanel>
                         </StackPanel>
                     </Border>
 
-                    <StackPanel Orientation="Horizontal"
+                    <Border Background="White"
+                            CornerRadius="16"
+                            Padding="16"
+                            Margin="0,0,0,16"
+                            BorderThickness="1"
+                            BorderBrush="#ECECEC">
+                        <StackPanel>
+							<TextBlock
+                                       FontSize="16"
+                                       FontWeight="SemiBold"
+                                       Margin="0,0,0,8" Text="紀錄設定" />
+							<StackPanel Orientation="Horizontal" Margin="0,0,0,8" Width="260">
+                                <TextBlock Text="運行"
+                                           FontSize="13"
+                                           Foreground="#6E6E73"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,12,0" />
+                                <ComboBox x:Name="ProgressEveryCombo"
+                                          Height="32"
+                                          MinWidth="120"
+                                          Padding="8,4"
+                                          Background="White"
+                                          BorderBrush="#D1D1D6"
+                                          BorderThickness="1"
+                                          VerticalContentAlignment="Center" />
+                                <TextBlock Text="筆 紀錄一次"
+                                           FontSize="13"
+                                           Foreground="#6E6E73"
+                                           VerticalAlignment="Center"
+                                           Margin="8,0,0,0" />
+                            </StackPanel>
+                            <TextBlock x:Name="StatusText"
+                                       Text="尚未開始"
+                                       FontSize="13"
+                                       Foreground="#6E6E73"
+                                       Margin="0,4,0,0" />
+                            <TextBlock x:Name="ProgressText"
+                                       Text="進度：尚未開始"
+                                       FontSize="13"
+                                       Foreground="#6E6E73"
+                                       Margin="0,4,0,0" />
+                        </StackPanel>
+                    </Border>
+
+					<StackPanel Orientation="Horizontal"
                                 HorizontalAlignment="Center"
-                                Margin="0,24,0,16">
-                        <Button Content="主要動作"
+                                Margin="0,24,0,16" Width="380">
+						<Button Content="排名"
+                                Style="{StaticResource SecondaryButtonStyle}"
+                                FontSize="16"
+                                Padding="34,10"
+                                Margin="0,0,12,0"
+                                Click="OnUpdateRankingClick" />
+						<Button Content="立即開始"
                                 Style="{StaticResource PrimaryButtonStyle}"
                                 FontSize="16"
                                 Padding="34,10"
-                                Margin="0,0,12,0" />
-                        <Button Content="次要動作"
+                                Margin="0,0,12,0"
+                                Click="OnStartClick" />
+						<Button Content="清除"
                                 Style="{StaticResource SecondaryButtonStyle}"
                                 FontSize="16"
-                                Padding="34,10" />
+                                Padding="34,10"
+                                Click="OnTerminateClick" />
                     </StackPanel>
                 </StackPanel>
             </ScrollViewer>
