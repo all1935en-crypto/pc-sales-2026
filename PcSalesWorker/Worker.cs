@@ -175,7 +175,7 @@ public sealed class Worker : BackgroundService
                 }
                 if ((updateAll || updateRankingOnly) && rankingColumn != null)
                 {
-                    AddIfChanged(context, pendingUpdates, resolvedRowIndex, rankingColumn, rankingIndex, ranking.HasValue ? ranking.Value : "無");
+                    AddIfChanged(context, pendingUpdates, resolvedRowIndex, rankingColumn, rankingIndex, ranking.HasValue ? ranking.Value : -100);
                 }
 
                 processed++;
