@@ -199,32 +199,31 @@
 
 					<StackPanel Orientation="Horizontal"
                                 HorizontalAlignment="Center"
-                                Margin="0,24,0,16" Width="380">
+                                Margin="0,24,0,16">
 						<Button Content="排名"
                                 Style="{StaticResource SecondaryButtonStyle}"
                                 FontSize="16"
-                                Padding="34,10"
+                                Padding="22,10"
                                 Margin="0,0,12,0"
                                 Click="OnUpdateRankingClick" />
-						<Button Content="立即開始"
+						<Button Content="開始"
                                 Style="{StaticResource PrimaryButtonStyle}"
                                 FontSize="16"
-                                Padding="34,10"
+                                Padding="22,10"
                                 Margin="0,0,12,0"
                                 Click="OnStartClick" />
 						<Button Content="清除"
                                 Style="{StaticResource SecondaryButtonStyle}"
                                 FontSize="16"
-                                Padding="34,10"
+                                Padding="22,10"
+                                Margin="0,0,12,0"
                                 Click="OnTerminateClick" />
+                        <Button Content="更新PC連結"
+                                Style="{StaticResource SecondaryButtonStyle}"
+                                FontSize="16"
+                                Padding="22,10"
+                                Click="OnUpdatePcLinkClick" />
                     </StackPanel>
-                    <Button Content="更新PC連結"
-                            Style="{StaticResource SecondaryButtonStyle}"
-                            FontSize="16"
-                            Padding="34,10"
-                            HorizontalAlignment="Center"
-                            Margin="0,0,0,16"
-                            Click="OnUpdatePcLinkClick" />
                 </StackPanel>
             </ScrollViewer>
         </Border>
