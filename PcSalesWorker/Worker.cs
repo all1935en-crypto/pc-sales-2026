@@ -106,111 +106,127 @@ public sealed class Worker : BackgroundService
 
         try
         {
-            var context = await _sheetService.LoadContextAsync(cancellationToken);
-            var rows = _sheetService.ExtractRows(context);
-            var lastRowIndex = rows.Count > 0 ? rows.Max(r => r.RowIndex) : _options.HeaderRow;
-            WriteProgress(new ProgressState
-            {
-                Total = rows.Count,
-                Processed = 0,
-                RowIndex = rows.Count > 0 ? rows[0].RowIndex : _options.HeaderRow,
-                Status = "running"
-            });
-
-            var rankingColumn = _sheetService.ColumnLetter(context, _options.Columns.Ranking);
-            var urlColumn = _sheetService.ColumnLetter(context, _options.Columns.Url);
-            var titleColumn = _sheetService.ColumnLetter(context, _options.Columns.Title);
-            var salesColumn = _sheetService.ColumnLetter(context, _options.Columns.Sales30);
-            var rankingIndex = _sheetService.ColumnIndex(context, _options.Columns.Ranking);
-            var urlIndex = _sheetService.ColumnIndex(context, _options.Columns.Url);
-            var titleIndex = _sheetService.ColumnIndex(context, _options.Columns.Title);
-            var salesIndex = _sheetService.ColumnIndex(context, _options.Columns.Sales30);
             var updateMode = GetUpdateMode();
-            var updateRankingOnly = string.Equals(updateMode, "ranking", StringComparison.OrdinalIgnoreCase);
-            var updateAll = !updateRankingOnly;
+            var updatePcLinkOnly = string.Equals(updateMode, "pc-link", StringComparison.OrdinalIgnoreCase);
 
-            if (updateAll && (urlColumn == null || titleColumn == null || salesColumn == null))
+            if (updatePcLinkOnly)
             {
-                throw new InvalidOperationException("工作表缺少必要欄位，請確認欄位名稱。");
-            }
-            if ((updateRankingOnly || updateAll) && rankingColumn == null)
-            {
-                throw new InvalidOperationException("找不到排名欄位，無法更新排名。");
-            }
-
-            var processed = 0;
-            var pendingUpdates = new List<SheetUpdate>();
-            foreach (var row in rows)
-            {
-                var resolvedRowIndex = _sheetService.ResolveRowIndex(context, row.ProductId, row.RowIndex);
-                int? ranking = null;
-                int? sales30 = null;
-                string? title = null;
-                try
+                WriteProgress(new ProgressState
                 {
-                    if (updateAll || updateRankingOnly)
+                    Total = 0,
+                    Processed = 0,
+                    Status = "running"
+                });
+                var updatedCount = await _sheetService.UpdatePcLinkAsync(cancellationToken);
+                _logger.LogInformation("更新 PC 連結流程完成，填入 {Count} 筆。", updatedCount);
+            }
+            else
+            {
+                var context = await _sheetService.LoadContextAsync(cancellationToken);
+                var rows = _sheetService.ExtractRows(context);
+                var lastRowIndex = rows.Count > 0 ? rows.Max(r => r.RowIndex) : _options.HeaderRow;
+                WriteProgress(new ProgressState
+                {
+                    Total = rows.Count,
+                    Processed = 0,
+                    RowIndex = rows.Count > 0 ? rows[0].RowIndex : _options.HeaderRow,
+                    Status = "running"
+                });
+
+                var rankingColumn = _sheetService.ColumnLetter(context, _options.Columns.Ranking);
+                var urlColumn = _sheetService.ColumnLetter(context, _options.Columns.Url);
+                var titleColumn = _sheetService.ColumnLetter(context, _options.Columns.Title);
+                var salesColumn = _sheetService.ColumnLetter(context, _options.Columns.Sales30);
+                var rankingIndex = _sheetService.ColumnIndex(context, _options.Columns.Ranking);
+                var urlIndex = _sheetService.ColumnIndex(context, _options.Columns.Url);
+                var titleIndex = _sheetService.ColumnIndex(context, _options.Columns.Title);
+                var salesIndex = _sheetService.ColumnIndex(context, _options.Columns.Sales30);
+                var updateRankingOnly = string.Equals(updateMode, "ranking", StringComparison.OrdinalIgnoreCase);
+                var updateAll = !updateRankingOnly;
+
+                if (updateAll && (urlColumn == null || titleColumn == null || salesColumn == null))
+                {
+                    throw new InvalidOperationException("工作表缺少必要欄位，請確認欄位名稱。");
+                }
+                if ((updateRankingOnly || updateAll) && rankingColumn == null)
+                {
+                    throw new InvalidOperationException("找不到排名欄位，無法更新排名。");
+                }
+
+                var processed = 0;
+                var pendingUpdates = new List<SheetUpdate>();
+                foreach (var row in rows)
+                {
+                    var resolvedRowIndex = _sheetService.ResolveRowIndex(context, row.ProductId, row.RowIndex);
+                    int? ranking = null;
+                    int? sales30 = null;
+                    string? title = null;
+                    try
                     {
-                        ranking = await _searchService.GetRankingAsync(row.Keyword, row.ProductId, cancellationToken);
+                        if (updateAll || updateRankingOnly)
+                        {
+                            ranking = await _searchService.GetRankingAsync(row.Keyword, row.ProductId, cancellationToken);
+                        }
+
+                        if (updateAll)
+                        {
+                            title = await _searchService.GetProductTitleAsync(row.ProductId, cancellationToken);
+                            sales30 = await _backendService.GetSales30Async(row.ProductId, cancellationToken);
+                        }
                     }
+                    catch (Exception ex)
+                    {
+                        errors.Add($"{row.ProductId}: {ex.Message}");
+                        ExceptionHelper.Report(_logger, $"商品 {row.ProductId} 解析失敗", ex);
+                    }
+
+                    var productUrl = $"https://24h.pchome.com.tw/prod/{row.ProductId}";
 
                     if (updateAll)
                     {
-                        title = await _searchService.GetProductTitleAsync(row.ProductId, cancellationToken);
-                        sales30 = await _backendService.GetSales30Async(row.ProductId, cancellationToken);
+                        AddIfChanged(context, pendingUpdates, resolvedRowIndex, urlColumn, urlIndex, productUrl);
+                        AddIfChanged(context, pendingUpdates, resolvedRowIndex, titleColumn, titleIndex, title ?? string.Empty);
+                        AddIfChanged(context, pendingUpdates, resolvedRowIndex, salesColumn, salesIndex, sales30.HasValue ? sales30.Value : string.Empty);
+                    }
+                    if ((updateAll || updateRankingOnly) && rankingColumn != null)
+                    {
+                        AddIfChanged(context, pendingUpdates, resolvedRowIndex, rankingColumn, rankingIndex, ranking.HasValue ? ranking.Value : -100);
+                    }
+
+                    processed++;
+                    if (progressEvery > 0 && (processed % progressEvery == 0 || processed == 1))
+                    {
+                        WriteProgress(new ProgressState
+                        {
+                            Total = rows.Count,
+                            Processed = processed,
+                            RowIndex = resolvedRowIndex,
+                            ProductId = row.ProductId,
+                            Status = "running"
+                        });
+                    }
+                    if (processed % 10 == 0)
+                    {
+                        await _sheetService.ApplyUpdatesAsync(context, pendingUpdates, cancellationToken);
+                        pendingUpdates.Clear();
+                    }
+                    if (pauseAfterFirst && processed >= 1)
+                    {
+                        _logger.LogWarning("已暫停在第一筆商品後，請手動測試。");
+                        break;
+                    }
+                    if (pauseAfterN > 0 && processed >= pauseAfterN)
+                    {
+                        _logger.LogWarning("已暫停在第 {Count} 筆商品後，請手動測試。", pauseAfterN);
+                        break;
                     }
                 }
-                catch (Exception ex)
-                {
-                    errors.Add($"{row.ProductId}: {ex.Message}");
-                    ExceptionHelper.Report(_logger, $"商品 {row.ProductId} 解析失敗", ex);
-                }
 
-                var productUrl = $"https://24h.pchome.com.tw/prod/{row.ProductId}";
-
-                if (updateAll)
-                {
-                    AddIfChanged(context, pendingUpdates, resolvedRowIndex, urlColumn, urlIndex, productUrl);
-                    AddIfChanged(context, pendingUpdates, resolvedRowIndex, titleColumn, titleIndex, title ?? string.Empty);
-                    AddIfChanged(context, pendingUpdates, resolvedRowIndex, salesColumn, salesIndex, sales30.HasValue ? sales30.Value : string.Empty);
-                }
-                if ((updateAll || updateRankingOnly) && rankingColumn != null)
-                {
-                    AddIfChanged(context, pendingUpdates, resolvedRowIndex, rankingColumn, rankingIndex, ranking.HasValue ? ranking.Value : -100);
-                }
-
-                processed++;
-                if (progressEvery > 0 && (processed % progressEvery == 0 || processed == 1))
-                {
-                    WriteProgress(new ProgressState
-                    {
-                        Total = rows.Count,
-                        Processed = processed,
-                        RowIndex = resolvedRowIndex,
-                        ProductId = row.ProductId,
-                        Status = "running"
-                    });
-                }
-                if (processed % 10 == 0)
+                if (pendingUpdates.Count > 0)
                 {
                     await _sheetService.ApplyUpdatesAsync(context, pendingUpdates, cancellationToken);
                     pendingUpdates.Clear();
                 }
-                if (pauseAfterFirst && processed >= 1)
-                {
-                    _logger.LogWarning("已暫停在第一筆商品後，請手動測試。");
-                    break;
-                }
-                if (pauseAfterN > 0 && processed >= pauseAfterN)
-                {
-                    _logger.LogWarning("已暫停在第 {Count} 筆商品後，請手動測試。", pauseAfterN);
-                    break;
-                }
-            }
-
-            if (pendingUpdates.Count > 0)
-            {
-                await _sheetService.ApplyUpdatesAsync(context, pendingUpdates, cancellationToken);
-                pendingUpdates.Clear();
             }
 
         }

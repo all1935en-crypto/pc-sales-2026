@@ -138,6 +138,20 @@ public partial class MainWindow : Window
         }
     }
 
+    private void OnUpdatePcLinkClick(object sender, RoutedEventArgs e)
+    {
+        var progressEvery = ProgressEveryCombo.SelectedItem as int? ?? 10;
+        if (!TryStartWorker(updateMode: "pc-link", progressEvery: progressEvery))
+        {
+            StatusText.Text = "啟動失敗";
+            return;
+        }
+
+        StatusText.Text = "更新PC連結中";
+        ProgressText.Text = "進度：處理中";
+        StartProgressTimer();
+    }
+
     private void OnWindowMouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
         if (e.LeftButton != System.Windows.Input.MouseButtonState.Pressed)

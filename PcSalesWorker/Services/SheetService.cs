@@ -11,6 +11,13 @@ namespace PcSalesWorker.Services;
 
 public sealed class SheetService
 {
+    private const string PcLinkSpreadsheetId = "1IFy624vuMAFIUshcTBlcUb0xtpnq0o8lgwhG2ON9Q0Y";
+    private const int PcLinkSheetId = 1044879942;
+    private const string PcLinkSheetFallbackName = "PC連結";
+    private const string SalesSpreadsheetId = "1JdEZdgzdq3YIkT2X6fPirlLa1AYJPdbzf9AmHFehH5E";
+    private const int SalesSheetId = 0;
+    private const string SalesSheetFallbackName = "2026年PC銷量";
+
     private readonly ILogger<SheetService> _logger;
     private readonly AppOptions _options;
     private readonly SheetsService _sheets;
@@ -186,6 +193,100 @@ public sealed class SheetService
         await batchRequest.ExecuteAsync(cancellationToken);
     }
 
+    public async Task<int> UpdatePcLinkAsync(CancellationToken cancellationToken)
+    {
+        var pcLinkSheetName = await ResolveSheetNameAsync(
+            PcLinkSpreadsheetId,
+            PcLinkSheetId,
+            PcLinkSheetFallbackName,
+            cancellationToken);
+        var salesSheetName = await ResolveSheetNameAsync(
+            SalesSpreadsheetId,
+            SalesSheetId,
+            SalesSheetFallbackName,
+            cancellationToken);
+
+        var pcLinkReadRange = BuildRange(pcLinkSheetName, "C2:G");
+        var pcLinkResponse = await _sheets.Spreadsheets.Values.Get(PcLinkSpreadsheetId, pcLinkReadRange)
+            .ExecuteAsync(cancellationToken);
+        var pcLinkRows = pcLinkResponse.Values ?? new List<IList<object>>();
+
+        var pendingRows = new List<(int RowIndex, string ProductId)>();
+        for (var i = 0; i < pcLinkRows.Count; i++)
+        {
+            var row = pcLinkRows[i];
+            var productId = GetCell(row, 0).Trim();
+            if (string.IsNullOrWhiteSpace(productId))
+            {
+                continue;
+            }
+
+            var linkCell = GetCell(row, 4).Trim();
+            if (!string.IsNullOrWhiteSpace(linkCell))
+            {
+                continue;
+            }
+
+            pendingRows.Add((i + 2, productId));
+        }
+
+        if (pendingRows.Count == 0)
+        {
+            _logger.LogInformation("PC連結表沒有需要比對的空白 G 欄。");
+            return 0;
+        }
+
+        var salesIdRange = BuildRange(salesSheetName, "F2:F");
+        var salesResponse = await _sheets.Spreadsheets.Values.Get(SalesSpreadsheetId, salesIdRange)
+            .ExecuteAsync(cancellationToken);
+        var salesRows = salesResponse.Values ?? new List<IList<object>>();
+
+        var salesIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var row in salesRows)
+        {
+            var productId = GetCell(row, 0).Trim();
+            if (!string.IsNullOrWhiteSpace(productId))
+            {
+                salesIds.Add(productId);
+            }
+        }
+
+        var updates = new List<ValueRange>();
+        foreach (var pendingRow in pendingRows)
+        {
+            if (!salesIds.Contains(pendingRow.ProductId))
+            {
+                continue;
+            }
+
+            updates.Add(new ValueRange
+            {
+                Range = BuildRange(pcLinkSheetName, $"G{pendingRow.RowIndex}"),
+                Values = new List<IList<object>>
+                {
+                    new List<object> { "---" }
+                }
+            });
+        }
+
+        if (updates.Count == 0)
+        {
+            _logger.LogInformation("PC連結表空白 G 欄共 {Count} 筆，沒有任何商品 ID 命中 2026年PC銷量 F 欄。", pendingRows.Count);
+            return 0;
+        }
+
+        var updateRequest = new BatchUpdateValuesRequest
+        {
+            ValueInputOption = "RAW",
+            Data = updates
+        };
+        var batchRequest = _sheets.Spreadsheets.Values.BatchUpdate(updateRequest, PcLinkSpreadsheetId);
+        await batchRequest.ExecuteAsync(cancellationToken);
+
+        _logger.LogInformation("PC連結同步完成，已填入 {Updated} 筆。", updates.Count);
+        return updates.Count;
+    }
+
     public int ResolveRowIndex(SheetContext context, string productId, int expectedRowIndex)
     {
         if (!context.Headers.TryGetValue(_options.Columns.ProductId, out var productIdColumn))
@@ -260,6 +361,46 @@ public sealed class SheetService
         }
 
         return index;
+    }
+
+    private async Task<string> ResolveSheetNameAsync(
+        string spreadsheetId,
+        int sheetId,
+        string fallbackName,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var request = _sheets.Spreadsheets.Get(spreadsheetId);
+            request.Fields = "sheets(properties(sheetId,title))";
+            var spreadsheet = await request.ExecuteAsync(cancellationToken);
+            var bySheetId = spreadsheet.Sheets?
+                .FirstOrDefault(x => x.Properties?.SheetId == sheetId)?
+                .Properties?
+                .Title;
+
+            if (!string.IsNullOrWhiteSpace(bySheetId))
+            {
+                return bySheetId;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "用 sheetId 解析工作表名稱失敗，改用預設名稱：{FallbackName}", fallbackName);
+        }
+
+        if (string.IsNullOrWhiteSpace(fallbackName))
+        {
+            throw new InvalidOperationException("找不到工作表名稱。");
+        }
+
+        return fallbackName;
+    }
+
+    private static string BuildRange(string sheetName, string range)
+    {
+        var escaped = sheetName.Replace("'", "''");
+        return $"'{escaped}'!{range}";
     }
 
     private static string GetCell(IList<object> row, int index)

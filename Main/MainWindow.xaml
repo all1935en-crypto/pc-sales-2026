@@ -218,6 +218,13 @@
                                 Padding="34,10"
                                 Click="OnTerminateClick" />
                     </StackPanel>
+                    <Button Content="更新PC連結"
+                            Style="{StaticResource SecondaryButtonStyle}"
+                            FontSize="16"
+                            Padding="34,10"
+                            HorizontalAlignment="Center"
+                            Margin="0,0,0,16"
+                            Click="OnUpdatePcLinkClick" />
                 </StackPanel>
             </ScrollViewer>
         </Border>
