@@ -8,6 +8,8 @@ namespace PcSalesWorker;
 
 public sealed class Worker : BackgroundService
 {
+    private const string MissingTitleText = "異常！抓不到標題";
+
     private readonly ILogger<Worker> _logger;
     private readonly AppOptions _options;
     private readonly SheetService _sheetService;
@@ -155,12 +157,14 @@ public sealed class Worker : BackgroundService
 
                 var processed = 0;
                 var pendingUpdates = new List<SheetUpdate>();
+                var pendingTitleTextColorUpdates = new List<SheetTextColorUpdate>();
                 foreach (var row in rows)
                 {
                     var resolvedRowIndex = _sheetService.ResolveRowIndex(context, row.ProductId, row.RowIndex);
                     int? ranking = null;
                     int? sales30 = null;
                     string? title = null;
+                    var titleIsError = false;
 
                     if (updateAll || updateRankingOnly)
                     {
@@ -183,13 +187,10 @@ public sealed class Worker : BackgroundService
                         }
                         catch (Exception ex)
                         {
-                            if (pendingUpdates.Count > 0)
-                            {
-                                await _sheetService.ApplyUpdatesAsync(context, pendingUpdates, cancellationToken);
-                                pendingUpdates.Clear();
-                            }
-
-                            throw new InvalidOperationException($"商品 {row.ProductId} 標題抓取失敗：{ex.Message}", ex);
+                            errors.Add($"{row.ProductId}（標題）: {ex.Message}");
+                            ExceptionHelper.Report(_logger, $"商品 {row.ProductId} 標題抓取失敗", ex);
+                            title = MissingTitleText;
+                            titleIsError = true;
                         }
 
                         try
@@ -208,8 +209,9 @@ public sealed class Worker : BackgroundService
                     if (updateAll)
                     {
                         AddIfChanged(context, pendingUpdates, resolvedRowIndex, urlColumn, urlIndex, productUrl);
-                        AddIfChanged(context, pendingUpdates, resolvedRowIndex, titleColumn, titleIndex, title!);
+                        AddIfChanged(context, pendingUpdates, resolvedRowIndex, titleColumn, titleIndex, title ?? MissingTitleText);
                         AddIfChanged(context, pendingUpdates, resolvedRowIndex, salesColumn, salesIndex, sales30.HasValue ? sales30.Value : string.Empty);
+                        AddTitleTextColorUpdate(pendingTitleTextColorUpdates, resolvedRowIndex, titleIndex, titleIsError);
                     }
                     if ((updateAll || updateRankingOnly) && rankingColumn != null)
                     {
@@ -230,8 +232,9 @@ public sealed class Worker : BackgroundService
                     }
                     if (processed % 10 == 0)
                     {
-                        await _sheetService.ApplyUpdatesAsync(context, pendingUpdates, cancellationToken);
+                        await _sheetService.ApplyUpdatesAsync(context, pendingUpdates, pendingTitleTextColorUpdates, cancellationToken);
                         pendingUpdates.Clear();
+                        pendingTitleTextColorUpdates.Clear();
                     }
                     if (pauseAfterFirst && processed >= 1)
                     {
@@ -245,10 +248,11 @@ public sealed class Worker : BackgroundService
                     }
                 }
 
-                if (pendingUpdates.Count > 0)
+                if (pendingUpdates.Count > 0 || pendingTitleTextColorUpdates.Count > 0)
                 {
-                    await _sheetService.ApplyUpdatesAsync(context, pendingUpdates, cancellationToken);
+                    await _sheetService.ApplyUpdatesAsync(context, pendingUpdates, pendingTitleTextColorUpdates, cancellationToken);
                     pendingUpdates.Clear();
+                    pendingTitleTextColorUpdates.Clear();
                 }
             }
 
@@ -351,6 +355,22 @@ public sealed class Worker : BackgroundService
 
         updates.Add(new SheetUpdate(rowIndex, columnLetter, value));
         SetCellValue(context, rowIndex, columnIndex.Value, value);
+    }
+
+    private static void AddTitleTextColorUpdate(List<SheetTextColorUpdate> updates, int rowIndex, int? columnIndex, bool isError)
+    {
+        if (columnIndex == null || columnIndex < 0)
+        {
+            return;
+        }
+
+        if (isError)
+        {
+            updates.Add(new SheetTextColorUpdate(rowIndex, columnIndex.Value, 1f, 0f, 0f));
+            return;
+        }
+
+        updates.Add(new SheetTextColorUpdate(rowIndex, columnIndex.Value, 0f, 0f, 0f));
     }
 
     private static string GetCellValue(SheetContext context, int rowIndex, int columnIndex)

@@ -40,16 +40,26 @@ public sealed class SheetService
     public async Task<SheetContext> LoadContextAsync(CancellationToken cancellationToken)
     {
         var sheetName = _options.SheetName;
-        if (string.IsNullOrWhiteSpace(sheetName))
-        {
-            var sheet = await _sheets.Spreadsheets.Get(_options.SpreadsheetId)
-                .ExecuteAsync(cancellationToken);
-            sheetName = sheet.Sheets?.FirstOrDefault()?.Properties?.Title ?? string.Empty;
-        }
+        var sheetMetadataRequest = _sheets.Spreadsheets.Get(_options.SpreadsheetId);
+        sheetMetadataRequest.Fields = "sheets(properties(sheetId,title))";
+        var spreadsheet = await sheetMetadataRequest.ExecuteAsync(cancellationToken);
 
         if (string.IsNullOrWhiteSpace(sheetName))
         {
+            sheetName = spreadsheet.Sheets?.FirstOrDefault()?.Properties?.Title ?? string.Empty;
+        }
+        if (string.IsNullOrWhiteSpace(sheetName))
+        {
             throw new InvalidOperationException("找不到工作表名稱，請在 appsettings.json 設定 SheetName。");
+        }
+
+        var sheetId = spreadsheet.Sheets?
+            .FirstOrDefault(s => string.Equals(s.Properties?.Title, sheetName, StringComparison.OrdinalIgnoreCase))?
+            .Properties?
+            .SheetId;
+        if (!sheetId.HasValue)
+        {
+            throw new InvalidOperationException($"找不到工作表 ID：{sheetName}");
         }
 
         Dictionary<string, int>? headersFromGrid = null;
@@ -110,7 +120,7 @@ public sealed class SheetService
 
         LogHeaderIndex(headers);
 
-        return new SheetContext(sheetName, headers, values);
+        return new SheetContext(sheetName, sheetId.Value, headers, values);
     }
 
     private Dictionary<string, int> BuildHeaderMap(IEnumerable<string?> headerValues, string sourceName)
@@ -200,32 +210,104 @@ public sealed class SheetService
         return rows;
     }
 
-    public async Task ApplyUpdatesAsync(SheetContext context, IReadOnlyList<SheetUpdate> updates, CancellationToken cancellationToken)
+    public async Task ApplyUpdatesAsync(
+        SheetContext context,
+        IReadOnlyList<SheetUpdate> updates,
+        IReadOnlyList<SheetTextColorUpdate>? textColorUpdates,
+        CancellationToken cancellationToken)
     {
-        if (updates.Count == 0)
+        var colorUpdates = textColorUpdates ?? Array.Empty<SheetTextColorUpdate>();
+        if (updates.Count == 0 && colorUpdates.Count == 0)
         {
             return;
         }
 
-        var data = new List<ValueRange>();
-        foreach (var update in updates)
+        if (updates.Count > 0)
         {
-            var range = $"{context.SheetName}!{update.Column}{update.RowIndex}";
-            data.Add(new ValueRange
+            var data = new List<ValueRange>();
+            foreach (var update in updates)
             {
-                Range = range,
-                Values = new List<IList<object>> { new List<object> { update.Value } }
+                var range = $"{context.SheetName}!{update.Column}{update.RowIndex}";
+                data.Add(new ValueRange
+                {
+                    Range = range,
+                    Values = new List<IList<object>> { new List<object> { update.Value } }
+                });
+            }
+
+            var request = new BatchUpdateValuesRequest
+            {
+                ValueInputOption = "RAW",
+                Data = data
+            };
+
+            var batchRequest = _sheets.Spreadsheets.Values.BatchUpdate(request, _options.SpreadsheetId);
+            await batchRequest.ExecuteAsync(cancellationToken);
+        }
+
+        if (colorUpdates.Count == 0)
+        {
+            return;
+        }
+
+        var latestColorByCell = new Dictionary<(int RowIndex, int ColumnIndex), SheetTextColorUpdate>();
+        foreach (var colorUpdate in colorUpdates)
+        {
+            if (colorUpdate.RowIndex <= 0 || colorUpdate.ColumnIndex < 0)
+            {
+                continue;
+            }
+
+            latestColorByCell[(colorUpdate.RowIndex, colorUpdate.ColumnIndex)] = colorUpdate;
+        }
+
+        if (latestColorByCell.Count == 0)
+        {
+            return;
+        }
+
+        var formatRequests = new List<Request>();
+        foreach (var colorUpdate in latestColorByCell.Values)
+        {
+            formatRequests.Add(new Request
+            {
+                RepeatCell = new RepeatCellRequest
+                {
+                    Range = new GridRange
+                    {
+                        SheetId = context.SheetId,
+                        StartRowIndex = colorUpdate.RowIndex - 1,
+                        EndRowIndex = colorUpdate.RowIndex,
+                        StartColumnIndex = colorUpdate.ColumnIndex,
+                        EndColumnIndex = colorUpdate.ColumnIndex + 1
+                    },
+                    Cell = new CellData
+                    {
+                        UserEnteredFormat = new CellFormat
+                        {
+                            TextFormat = new TextFormat
+                            {
+                                ForegroundColor = new Color
+                                {
+                                    Red = colorUpdate.Red,
+                                    Green = colorUpdate.Green,
+                                    Blue = colorUpdate.Blue
+                                }
+                            }
+                        }
+                    },
+                    Fields = "userEnteredFormat.textFormat.foregroundColor"
+                }
             });
         }
 
-        var request = new BatchUpdateValuesRequest
+        var formatBatch = new BatchUpdateSpreadsheetRequest
         {
-            ValueInputOption = "RAW",
-            Data = data
+            Requests = formatRequests
         };
 
-        var batchRequest = _sheets.Spreadsheets.Values.BatchUpdate(request, _options.SpreadsheetId);
-        await batchRequest.ExecuteAsync(cancellationToken);
+        var formatBatchRequest = _sheets.Spreadsheets.BatchUpdate(formatBatch, _options.SpreadsheetId);
+        await formatBatchRequest.ExecuteAsync(cancellationToken);
     }
 
     public async Task<int> UpdatePcLinkAsync(CancellationToken cancellationToken)
@@ -462,6 +544,8 @@ public sealed class SheetService
     }
 }
 
-public sealed record SheetContext(string SheetName, Dictionary<string, int> Headers, IList<IList<object>> Values);
+public sealed record SheetContext(string SheetName, int SheetId, Dictionary<string, int> Headers, IList<IList<object>> Values);
 
 public sealed record SheetUpdate(int RowIndex, string Column, object Value);
+
+public sealed record SheetTextColorUpdate(int RowIndex, int ColumnIndex, float Red, float Green, float Blue);
