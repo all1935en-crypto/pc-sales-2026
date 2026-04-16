@@ -161,23 +161,46 @@ public sealed class Worker : BackgroundService
                     int? ranking = null;
                     int? sales30 = null;
                     string? title = null;
-                    try
+
+                    if (updateAll || updateRankingOnly)
                     {
-                        if (updateAll || updateRankingOnly)
+                        try
                         {
                             ranking = await _searchService.GetRankingAsync(row.Keyword, row.ProductId, cancellationToken);
                         }
-
-                        if (updateAll)
+                        catch (Exception ex)
                         {
-                            title = await _searchService.GetProductTitleAsync(row.ProductId, cancellationToken);
-                            sales30 = await _backendService.GetSales30Async(row.ProductId, cancellationToken);
+                            errors.Add($"{row.ProductId}（排名）: {ex.Message}");
+                            ExceptionHelper.Report(_logger, $"商品 {row.ProductId} 排名解析失敗", ex);
                         }
                     }
-                    catch (Exception ex)
+
+                    if (updateAll)
                     {
-                        errors.Add($"{row.ProductId}: {ex.Message}");
-                        ExceptionHelper.Report(_logger, $"商品 {row.ProductId} 解析失敗", ex);
+                        try
+                        {
+                            title = await _searchService.GetProductTitleRequiredAsync(row.ProductId, row.Keyword, cancellationToken);
+                        }
+                        catch (Exception ex)
+                        {
+                            if (pendingUpdates.Count > 0)
+                            {
+                                await _sheetService.ApplyUpdatesAsync(context, pendingUpdates, cancellationToken);
+                                pendingUpdates.Clear();
+                            }
+
+                            throw new InvalidOperationException($"商品 {row.ProductId} 標題抓取失敗：{ex.Message}", ex);
+                        }
+
+                        try
+                        {
+                            sales30 = await _backendService.GetSales30Async(row.ProductId, cancellationToken);
+                        }
+                        catch (Exception ex)
+                        {
+                            errors.Add($"{row.ProductId}（30日銷量）: {ex.Message}");
+                            ExceptionHelper.Report(_logger, $"商品 {row.ProductId} 銷量解析失敗", ex);
+                        }
                     }
 
                     var productUrl = $"https://24h.pchome.com.tw/prod/{row.ProductId}";
@@ -185,7 +208,7 @@ public sealed class Worker : BackgroundService
                     if (updateAll)
                     {
                         AddIfChanged(context, pendingUpdates, resolvedRowIndex, urlColumn, urlIndex, productUrl);
-                        AddIfChanged(context, pendingUpdates, resolvedRowIndex, titleColumn, titleIndex, title ?? string.Empty);
+                        AddIfChanged(context, pendingUpdates, resolvedRowIndex, titleColumn, titleIndex, title!);
                         AddIfChanged(context, pendingUpdates, resolvedRowIndex, salesColumn, salesIndex, sales30.HasValue ? sales30.Value : string.Empty);
                     }
                     if ((updateAll || updateRankingOnly) && rankingColumn != null)

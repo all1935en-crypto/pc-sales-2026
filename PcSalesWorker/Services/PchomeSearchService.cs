@@ -67,7 +67,47 @@ public sealed class PchomeSearchService
         return null;
     }
 
+    public async Task<string> GetProductTitleRequiredAsync(string productId, string keyword, CancellationToken cancellationToken)
+    {
+        var maxAttempts = GetTitleRetryAttempts();
+        var delayMs = GetTitleRetryDelayMs();
+        Exception? lastException = null;
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                var title = await GetProductTitleSinglePassAsync(productId, keyword, cancellationToken);
+                if (!string.IsNullOrWhiteSpace(title))
+                {
+                    return title;
+                }
+
+                _logger.LogWarning("商品 {ProductId} 第 {Attempt}/{MaxAttempts} 次尚未取得標題。", productId, attempt, maxAttempts);
+            }
+            catch (Exception ex)
+            {
+                lastException = ex;
+                _logger.LogWarning(ex, "商品 {ProductId} 第 {Attempt}/{MaxAttempts} 次抓標題失敗。", productId, attempt, maxAttempts);
+            }
+
+            if (attempt < maxAttempts)
+            {
+                await Task.Delay(delayMs * attempt, cancellationToken);
+            }
+        }
+
+        throw new InvalidOperationException($"商品 {productId} 無法取得標題（已重試 {maxAttempts} 次）。", lastException);
+    }
+
     public async Task<string?> GetProductTitleAsync(string productId, CancellationToken cancellationToken)
+    {
+        return await GetProductTitleSinglePassAsync(productId, keyword: string.Empty, cancellationToken);
+    }
+
+    private async Task<string?> GetProductTitleSinglePassAsync(string productId, string keyword, CancellationToken cancellationToken)
     {
         var url = $"https://24h.pchome.com.tw/prod/{productId}";
         var request = new HttpRequestMessage(HttpMethod.Get, url);
@@ -76,13 +116,14 @@ public sealed class PchomeSearchService
         if (!response.IsSuccessStatusCode)
         {
             _logger.LogWarning("商品 {ProductId} 標題頁面回應失敗：{StatusCode}", productId, (int)response.StatusCode);
-            return await GetProductTitleFromSearchApiAsync(productId, cancellationToken);
+            return await ResolveTitleFromFallbacksAsync(productId, keyword, cancellationToken);
         }
 
         var html = await response.Content.ReadAsStringAsync(cancellationToken);
         var title = HtmlExtractMetaContent(html, "og:title")
             ?? HtmlExtractMetaContent(html, "twitter:title")
             ?? HtmlExtractMetaContent(html, "title")
+            ?? HtmlExtractJsonLdName(html)
             ?? HtmlExtractTitle(html);
 
         var normalized = NormalizeTitle(title);
@@ -92,14 +133,39 @@ public sealed class PchomeSearchService
         }
 
         _logger.LogWarning("商品 {ProductId} 無法從商品頁擷取標題，改用搜尋 API 嘗試。", productId);
-        return await GetProductTitleFromSearchApiAsync(productId, cancellationToken);
+        return await ResolveTitleFromFallbacksAsync(productId, keyword, cancellationToken);
     }
 
-    private async Task<string?> GetProductTitleFromSearchApiAsync(string productId, CancellationToken cancellationToken)
+    private async Task<string?> ResolveTitleFromFallbacksAsync(string productId, string keyword, CancellationToken cancellationToken)
     {
+        var fromSearchById = await GetProductTitleFromSearchApiAsync(productId, productId, cancellationToken);
+        if (!string.IsNullOrWhiteSpace(fromSearchById))
+        {
+            return fromSearchById;
+        }
+
+        if (!string.IsNullOrWhiteSpace(keyword))
+        {
+            var fromSearchByKeyword = await GetProductTitleFromSearchApiAsync(keyword, productId, cancellationToken);
+            if (!string.IsNullOrWhiteSpace(fromSearchByKeyword))
+            {
+                return fromSearchByKeyword;
+            }
+        }
+
+        return await GetProductTitleFromProdApiAsync(productId, cancellationToken);
+    }
+
+    private async Task<string?> GetProductTitleFromSearchApiAsync(string query, string productId, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return null;
+        }
+
         try
         {
-            var encoded = WebUtility.UrlEncode(productId);
+            var encoded = WebUtility.UrlEncode(query.Trim());
             var url = $"{_options.Pchome.SearchApiBase}?q={encoded}&page=1";
             var json = await _httpClient.GetStringAsync(url, cancellationToken);
             using var doc = JsonDocument.Parse(json);
@@ -108,6 +174,7 @@ public sealed class PchomeSearchService
                 return null;
             }
 
+            string? partialMatch = null;
             foreach (var prod in prods.EnumerateArray())
             {
                 if (!prod.TryGetProperty("Id", out var idElement))
@@ -118,6 +185,10 @@ public sealed class PchomeSearchService
                 var id = idElement.GetString() ?? string.Empty;
                 if (!string.Equals(id, productId, StringComparison.OrdinalIgnoreCase))
                 {
+                    if (partialMatch == null && id.StartsWith(productId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        partialMatch = NormalizeTitle(prod.TryGetProperty("Name", out var altNameElement) ? altNameElement.GetString() : null);
+                    }
                     continue;
                 }
 
@@ -128,10 +199,105 @@ public sealed class PchomeSearchService
 
                 return NormalizeTitle(nameElement.GetString());
             }
+
+            if (!string.IsNullOrWhiteSpace(partialMatch))
+            {
+                return partialMatch;
+            }
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "商品 {ProductId} 搜尋 API 取標題失敗。", productId);
+            _logger.LogWarning(ex, "商品 {ProductId} 搜尋 API 取標題失敗（query={Query}）。", productId, query);
+        }
+
+        return null;
+    }
+
+    private async Task<string?> GetProductTitleFromProdApiAsync(string productId, CancellationToken cancellationToken)
+    {
+        var urls = new[]
+        {
+            $"https://ecapi.pchome.com.tw/ecshop/prodapi/v2/prod/{productId}&fields=Id,Name,Nick",
+            $"https://ecapi.pchome.com.tw/ecshop/prodapi/v2/prod/{productId}&fields=Id,Name,Nick&_={DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}"
+        };
+
+        foreach (var url in urls)
+        {
+            try
+            {
+                var response = await _httpClient.GetAsync(url, cancellationToken);
+                if (!response.IsSuccessStatusCode)
+                {
+                    continue;
+                }
+
+                var raw = await response.Content.ReadAsStringAsync(cancellationToken);
+                if (string.IsNullOrWhiteSpace(raw))
+                {
+                    continue;
+                }
+
+                var start = raw.IndexOf('{');
+                var end = raw.LastIndexOf('}');
+                if (start < 0 || end <= start)
+                {
+                    continue;
+                }
+
+                var json = raw.Substring(start, end - start + 1);
+                using var doc = JsonDocument.Parse(json);
+                var root = doc.RootElement;
+
+                if (root.ValueKind == JsonValueKind.Object)
+                {
+                    if (root.TryGetProperty(productId, out var productNode) && productNode.ValueKind == JsonValueKind.Object)
+                    {
+                        var title = ExtractProductName(productNode);
+                        if (!string.IsNullOrWhiteSpace(title))
+                        {
+                            return title;
+                        }
+                    }
+
+                    var topLevelTitle = ExtractProductName(root);
+                    if (!string.IsNullOrWhiteSpace(topLevelTitle))
+                    {
+                        return topLevelTitle;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "商品 {ProductId} Prod API 取標題失敗。", productId);
+            }
+        }
+
+        return null;
+    }
+
+    private static string? ExtractProductName(JsonElement node)
+    {
+        if (node.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        if (node.TryGetProperty("Name", out var nameElement))
+        {
+            var name = NormalizeTitle(nameElement.GetString());
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                return name;
+            }
+        }
+
+        if (node.TryGetProperty("Nick", out var nickElement))
+        {
+            var nick = NormalizeTitle(nickElement.GetString());
+            if (!string.IsNullOrWhiteSpace(nick))
+            {
+                return nick;
+            }
         }
 
         return null;
@@ -189,6 +355,91 @@ public sealed class PchomeSearchService
         return null;
     }
 
+    private static string? HtmlExtractJsonLdName(string html)
+    {
+        if (string.IsNullOrWhiteSpace(html))
+        {
+            return null;
+        }
+
+        var scripts = Regex.Matches(
+            html,
+            "<script\\b[^>]*type\\s*=\\s*([\"'])application/ld\\+json\\1[^>]*>(?<json>.*?)</script>",
+            RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
+        foreach (Match script in scripts)
+        {
+            try
+            {
+                var json = script.Groups["json"].Value.Trim();
+                if (string.IsNullOrWhiteSpace(json))
+                {
+                    continue;
+                }
+
+                using var doc = JsonDocument.Parse(json);
+                var name = FindNameInJson(doc.RootElement);
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    return WebUtility.HtmlDecode(name);
+                }
+            }
+            catch
+            {
+                // ignore
+            }
+        }
+
+        return null;
+    }
+
+    private static string? FindNameInJson(JsonElement element)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                {
+                    if (element.TryGetProperty("@type", out var typeElement))
+                    {
+                        var type = typeElement.GetString() ?? string.Empty;
+                        if (type.Contains("Product", StringComparison.OrdinalIgnoreCase)
+                            && element.TryGetProperty("name", out var nameElement))
+                        {
+                            var candidate = nameElement.GetString();
+                            if (!string.IsNullOrWhiteSpace(candidate))
+                            {
+                                return candidate;
+                            }
+                        }
+                    }
+
+                    foreach (var property in element.EnumerateObject())
+                    {
+                        var nested = FindNameInJson(property.Value);
+                        if (!string.IsNullOrWhiteSpace(nested))
+                        {
+                            return nested;
+                        }
+                    }
+
+                    return null;
+                }
+            case JsonValueKind.Array:
+                foreach (var item in element.EnumerateArray())
+                {
+                    var nested = FindNameInJson(item);
+                    if (!string.IsNullOrWhiteSpace(nested))
+                    {
+                        return nested;
+                    }
+                }
+
+                return null;
+            default:
+                return null;
+        }
+    }
+
     private static string? HtmlExtractTitle(string html)
     {
         var start = html.IndexOf("<title>", StringComparison.OrdinalIgnoreCase);
@@ -205,5 +456,27 @@ public sealed class PchomeSearchService
         }
 
         return WebUtility.HtmlDecode(html.Substring(start, end - start));
+    }
+
+    private static int GetTitleRetryAttempts()
+    {
+        var raw = Environment.GetEnvironmentVariable("TITLE_RETRY_ATTEMPTS");
+        if (int.TryParse(raw, out var value) && value >= 1)
+        {
+            return value;
+        }
+
+        return 8;
+    }
+
+    private static int GetTitleRetryDelayMs()
+    {
+        var raw = Environment.GetEnvironmentVariable("TITLE_RETRY_DELAY_MS");
+        if (int.TryParse(raw, out var value) && value >= 100)
+        {
+            return value;
+        }
+
+        return 500;
     }
 }
