@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using PcSalesWorker.Models;
@@ -74,14 +75,66 @@ public sealed class PchomeSearchService
         var response = await _httpClient.SendAsync(request, cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
-            return null;
+            _logger.LogWarning("商品 {ProductId} 標題頁面回應失敗：{StatusCode}", productId, (int)response.StatusCode);
+            return await GetProductTitleFromSearchApiAsync(productId, cancellationToken);
         }
 
         var html = await response.Content.ReadAsStringAsync(cancellationToken);
         var title = HtmlExtractMetaContent(html, "og:title")
+            ?? HtmlExtractMetaContent(html, "twitter:title")
+            ?? HtmlExtractMetaContent(html, "title")
             ?? HtmlExtractTitle(html);
 
-        return NormalizeTitle(title);
+        var normalized = NormalizeTitle(title);
+        if (!string.IsNullOrWhiteSpace(normalized))
+        {
+            return normalized;
+        }
+
+        _logger.LogWarning("商品 {ProductId} 無法從商品頁擷取標題，改用搜尋 API 嘗試。", productId);
+        return await GetProductTitleFromSearchApiAsync(productId, cancellationToken);
+    }
+
+    private async Task<string?> GetProductTitleFromSearchApiAsync(string productId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var encoded = WebUtility.UrlEncode(productId);
+            var url = $"{_options.Pchome.SearchApiBase}?q={encoded}&page=1";
+            var json = await _httpClient.GetStringAsync(url, cancellationToken);
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("Prods", out var prods))
+            {
+                return null;
+            }
+
+            foreach (var prod in prods.EnumerateArray())
+            {
+                if (!prod.TryGetProperty("Id", out var idElement))
+                {
+                    continue;
+                }
+
+                var id = idElement.GetString() ?? string.Empty;
+                if (!string.Equals(id, productId, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (!prod.TryGetProperty("Name", out var nameElement))
+                {
+                    return null;
+                }
+
+                return NormalizeTitle(nameElement.GetString());
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "商品 {ProductId} 搜尋 API 取標題失敗。", productId);
+        }
+
+        return null;
     }
 
     private static string? NormalizeTitle(string? title)
@@ -103,27 +156,37 @@ public sealed class PchomeSearchService
 
     private static string? HtmlExtractMetaContent(string html, string property)
     {
-        var marker = $"property=\"{property}\"";
-        var index = html.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-        if (index < 0)
+        if (string.IsNullOrWhiteSpace(html) || string.IsNullOrWhiteSpace(property))
         {
             return null;
         }
 
-        var contentIndex = html.IndexOf("content=\"", index, StringComparison.OrdinalIgnoreCase);
-        if (contentIndex < 0)
+        var metaTags = Regex.Matches(html, "<meta\\b[^>]*>", RegexOptions.IgnoreCase);
+        foreach (Match metaTag in metaTags)
         {
-            return null;
+            var tag = metaTag.Value;
+            var propMatch = Regex.Match(tag, "\\b(property|name)\\s*=\\s*([\"'])(?<value>.*?)\\2", RegexOptions.IgnoreCase);
+            if (!propMatch.Success)
+            {
+                continue;
+            }
+
+            var propValue = propMatch.Groups["value"].Value.Trim();
+            if (!string.Equals(propValue, property, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var contentMatch = Regex.Match(tag, "\\bcontent\\s*=\\s*([\"'])(?<value>.*?)\\1", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            if (!contentMatch.Success)
+            {
+                return null;
+            }
+
+            return WebUtility.HtmlDecode(contentMatch.Groups["value"].Value);
         }
 
-        contentIndex += "content=\"".Length;
-        var endIndex = html.IndexOf('"', contentIndex);
-        if (endIndex < 0)
-        {
-            return null;
-        }
-
-        return WebUtility.HtmlDecode(html.Substring(contentIndex, endIndex - contentIndex));
+        return null;
     }
 
     private static string? HtmlExtractTitle(string html)
