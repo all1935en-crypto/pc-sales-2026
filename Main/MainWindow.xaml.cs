@@ -314,12 +314,16 @@ public partial class MainWindow : Window
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
-                RedirectStandardError = true
+                RedirectStandardError = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8
             };
             psi.Environment["RUN_ONCE"] = "1";
             psi.Environment["UPDATE_MODE"] = updateMode;
             psi.Environment["PROGRESS_EVERY"] = progressEvery.ToString();
             psi.Environment["BRING_BROWSER_FRONT"] = "1";
+            psi.Environment["DOTNET_CLI_FORCE_UTF8_ENCODING"] = "1";
+            psi.Environment["DOTNET_CLI_UI_LANGUAGE"] = "zh-Hant";
             if (maxPages.HasValue)
             {
                 psi.Environment["APP__SEARCH__MAXPAGES"] = maxPages.Value.ToString();
@@ -330,7 +334,15 @@ public partial class MainWindow : Window
                 StartInfo = psi,
                 EnableRaisingEvents = true
             };
-            _workerProcess.OutputDataReceived += (_, _) => { };
+            _workerProcess.OutputDataReceived += (_, args) =>
+            {
+                if (string.IsNullOrWhiteSpace(args.Data))
+                {
+                    return;
+                }
+
+                AppendLineWithLimit(errorBuffer, args.Data);
+            };
             _workerProcess.ErrorDataReceived += (_, args) =>
             {
                 if (string.IsNullOrWhiteSpace(args.Data))
@@ -338,13 +350,7 @@ public partial class MainWindow : Window
                     return;
                 }
 
-                lock (errorBuffer)
-                {
-                    if (errorBuffer.Length < 4000)
-                    {
-                        errorBuffer.AppendLine(args.Data);
-                    }
-                }
+                AppendLineWithLimit(errorBuffer, args.Data);
             };
             _workerProcess.Exited += (_, _) =>
             {
@@ -528,6 +534,19 @@ public partial class MainWindow : Window
                 .Where(x => !string.IsNullOrWhiteSpace(x))
                 .Take(8);
             return string.Join(Environment.NewLine, lines);
+        }
+    }
+
+    private static void AppendLineWithLimit(StringBuilder buffer, string line)
+    {
+        lock (buffer)
+        {
+            if (buffer.Length >= 8000)
+            {
+                return;
+            }
+
+            buffer.AppendLine(line);
         }
     }
 

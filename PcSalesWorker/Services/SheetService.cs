@@ -6,6 +6,7 @@ using Google.Apis.Sheets.v4.Data;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using PcSalesWorker.Models;
+using SheetsColor = Google.Apis.Sheets.v4.Data.Color;
 
 namespace PcSalesWorker.Services;
 
@@ -287,7 +288,7 @@ public sealed class SheetService
                         {
                             TextFormat = new TextFormat
                             {
-                                ForegroundColor = new Color
+                                ForegroundColor = new SheetsColor
                                 {
                                     Red = colorUpdate.Red,
                                     Green = colorUpdate.Green,
