@@ -69,10 +69,9 @@ public sealed class SheetService
 
             if (rowData?.Values != null)
             {
-                headersFromGrid = rowData.Values
-                    .Select((cell, index) => new { Name = cell.FormattedValue?.Trim() ?? string.Empty, Index = index })
-                    .Where(x => !string.IsNullOrWhiteSpace(x.Name))
-                    .ToDictionary(x => x.Name, x => x.Index, StringComparer.OrdinalIgnoreCase);
+                headersFromGrid = BuildHeaderMap(
+                    rowData.Values.Select(cell => cell.FormattedValue),
+                    "GridData");
             }
         }
         catch (Exception ex)
@@ -91,19 +90,55 @@ public sealed class SheetService
         }
 
         var headerIndex = _options.HeaderRow - 1;
-        if (headersFromGrid == null)
+        var headersFromValues = BuildHeaderMap(
+            values[headerIndex].Select(value => value?.ToString()),
+            "Values API");
+
+        var headers = headersFromGrid != null && headersFromGrid.Count > 0
+            ? headersFromGrid
+            : headersFromValues;
+
+        if (headersFromGrid == null || headersFromGrid.Count == 0)
         {
-            throw new InvalidOperationException("讀取表頭失敗（GridData 為空），為避免欄位錯位已停止寫入。");
+            _logger.LogWarning("GridData 未提供可用表頭，已改用 Values API。");
         }
 
-        var headers = headersFromGrid ?? values[headerIndex]
-            .Select((value, index) => new { Name = value?.ToString()?.Trim() ?? string.Empty, Index = index })
-            .Where(x => !string.IsNullOrWhiteSpace(x.Name))
-            .ToDictionary(x => x.Name, x => x.Index, StringComparer.OrdinalIgnoreCase);
+        if (headers.Count == 0)
+        {
+            throw new InvalidOperationException("讀取表頭失敗（找不到任何可用欄位），已停止寫入。");
+        }
 
         LogHeaderIndex(headers);
 
         return new SheetContext(sheetName, headers, values);
+    }
+
+    private Dictionary<string, int> BuildHeaderMap(IEnumerable<string?> headerValues, string sourceName)
+    {
+        var headers = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var duplicatedHeaders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var index = 0;
+
+        foreach (var headerValue in headerValues)
+        {
+            var header = headerValue?.Trim() ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(header) && !headers.TryAdd(header, index))
+            {
+                duplicatedHeaders.Add(header);
+            }
+
+            index++;
+        }
+
+        if (duplicatedHeaders.Count > 0)
+        {
+            _logger.LogWarning(
+                "{SourceName} 表頭有重複欄位：{DuplicatedHeaders}，已採用最左側欄位。",
+                sourceName,
+                string.Join(", ", duplicatedHeaders.OrderBy(x => x)));
+        }
+
+        return headers;
     }
 
     private void LogHeaderIndex(Dictionary<string, int> headers)
