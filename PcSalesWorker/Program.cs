@@ -22,7 +22,6 @@ builder.Services.Configure<AppOptions>(builder.Configuration.GetSection("App"));
 builder.Services.AddSingleton<SheetService>();
 builder.Services.AddSingleton<PchomeSearchService>();
 builder.Services.AddSingleton<PchomeBackendService>();
-builder.Services.AddSingleton<MailService>();
 builder.Services.AddHostedService<Worker>();
 
 var host = builder.Build();

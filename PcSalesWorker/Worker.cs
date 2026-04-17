@@ -15,7 +15,6 @@ public sealed class Worker : BackgroundService
     private readonly SheetService _sheetService;
     private readonly PchomeSearchService _searchService;
     private readonly PchomeBackendService _backendService;
-    private readonly MailService _mailService;
     private readonly IHostApplicationLifetime _lifetime;
 
     public Worker(
@@ -24,7 +23,6 @@ public sealed class Worker : BackgroundService
         SheetService sheetService,
         PchomeSearchService searchService,
         PchomeBackendService backendService,
-        MailService mailService,
         IHostApplicationLifetime lifetime)
     {
         _logger = logger;
@@ -32,7 +30,6 @@ public sealed class Worker : BackgroundService
         _sheetService = sheetService;
         _searchService = searchService;
         _backendService = backendService;
-        _mailService = mailService;
         _lifetime = lifetime;
     }
 
@@ -262,15 +259,10 @@ public sealed class Worker : BackgroundService
 
         if (errors.Count > 0)
         {
-            var body = string.Join(Environment.NewLine, errors);
-            try
-            {
-                await _mailService.SendErrorAsync("PChome 30日銷量更新失敗", body, cancellationToken);
-            }
-            catch (Exception ex)
-            {
-                ExceptionHelper.Report(_logger, "寄送錯誤通知失敗", ex);
-            }
+            _logger.LogWarning(
+                "本次更新共有 {Count} 筆錯誤，已依設定略過 Email 通知。錯誤摘要：{Summary}",
+                errors.Count,
+                string.Join(" | ", errors.Take(5)));
         }
 
         var endAt = DateTimeOffset.Now;

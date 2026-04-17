@@ -25,21 +25,34 @@ public sealed class MailService
             return;
         }
 
-        using var client = new SmtpClient(_settings.SmtpServer, _settings.SmtpPort)
+        if (!TryValidateSettings(_settings, out var reason))
         {
-            EnableSsl = _settings.UseTls,
-            Credentials = new NetworkCredential(_settings.Email, _settings.AppPassword)
-        };
+            _logger.LogWarning("mail.json 設定不完整，略過寄送錯誤通知：{Reason}", reason);
+            return;
+        }
 
-        using var message = new MailMessage
+        try
         {
-            From = new MailAddress(_settings.Email, _settings.FromName),
-            Subject = subject,
-            Body = body
-        };
-        message.To.Add(_settings.ToEmail);
+            using var client = new SmtpClient(_settings.SmtpServer, _settings.SmtpPort)
+            {
+                EnableSsl = _settings.UseTls,
+                Credentials = new NetworkCredential(_settings.Email, _settings.AppPassword)
+            };
 
-        await client.SendMailAsync(message, cancellationToken);
+            using var message = new MailMessage
+            {
+                From = new MailAddress(_settings.Email, _settings.FromName),
+                Subject = subject,
+                Body = body
+            };
+            message.To.Add(_settings.ToEmail);
+
+            await client.SendMailAsync(message, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "寄送錯誤通知失敗，已略過。");
+        }
     }
 
     private async Task EnsureSettingsAsync(CancellationToken cancellationToken)
@@ -57,6 +70,61 @@ public sealed class MailService
 
         var json = await File.ReadAllTextAsync(_mailPath, cancellationToken);
         _settings = JsonSerializer.Deserialize<MailSettings>(json);
+    }
+
+    private static bool TryValidateSettings(MailSettings settings, out string reason)
+    {
+        if (string.IsNullOrWhiteSpace(settings.SmtpServer))
+        {
+            reason = "SmtpServer 空白";
+            return false;
+        }
+
+        if (settings.SmtpPort <= 0)
+        {
+            reason = "SmtpPort 無效";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.Email))
+        {
+            reason = "Email 空白";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.ToEmail))
+        {
+            reason = "ToEmail 空白";
+            return false;
+        }
+
+        if (!IsValidEmail(settings.Email))
+        {
+            reason = "Email 格式錯誤";
+            return false;
+        }
+
+        if (!IsValidEmail(settings.ToEmail))
+        {
+            reason = "ToEmail 格式錯誤";
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
+    private static bool IsValidEmail(string address)
+    {
+        try
+        {
+            _ = new MailAddress(address);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }
 
