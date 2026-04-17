@@ -181,14 +181,11 @@ public sealed class Worker : BackgroundService
 
                     if (updateAll)
                     {
-                        try
+                        title = await _searchService.GetProductTitleRequiredAsync(row.ProductId, row.Keyword, cancellationToken);
+                        if (string.IsNullOrWhiteSpace(title))
                         {
-                            title = await _searchService.GetProductTitleRequiredAsync(row.ProductId, row.Keyword, cancellationToken);
-                        }
-                        catch (Exception ex)
-                        {
-                            errors.Add($"{row.ProductId}（標題）: {ex.Message}");
-                            ExceptionHelper.Report(_logger, $"商品 {row.ProductId} 標題抓取失敗", ex);
+                            errors.Add($"{row.ProductId}（標題）: 無法取得標題，已填入異常訊息");
+                            _logger.LogWarning("商品 {ProductId} 標題抓取失敗，已回填異常訊息。", row.ProductId);
                             title = MissingTitleText;
                             titleIsError = true;
                         }

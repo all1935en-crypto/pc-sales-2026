@@ -67,11 +67,10 @@ public sealed class PchomeSearchService
         return null;
     }
 
-    public async Task<string> GetProductTitleRequiredAsync(string productId, string keyword, CancellationToken cancellationToken)
+    public async Task<string?> GetProductTitleRequiredAsync(string productId, string keyword, CancellationToken cancellationToken)
     {
         var maxAttempts = GetTitleRetryAttempts();
         var delayMs = GetTitleRetryDelayMs();
-        Exception? lastException = null;
 
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
@@ -89,7 +88,6 @@ public sealed class PchomeSearchService
             }
             catch (Exception ex)
             {
-                lastException = ex;
                 _logger.LogWarning(ex, "商品 {ProductId} 第 {Attempt}/{MaxAttempts} 次抓標題失敗。", productId, attempt, maxAttempts);
             }
 
@@ -99,7 +97,8 @@ public sealed class PchomeSearchService
             }
         }
 
-        throw new InvalidOperationException($"商品 {productId} 無法取得標題（已重試 {maxAttempts} 次）。", lastException);
+        _logger.LogWarning("商品 {ProductId} 無法取得標題（已重試 {MaxAttempts} 次）。", productId, maxAttempts);
+        return null;
     }
 
     public async Task<string?> GetProductTitleAsync(string productId, CancellationToken cancellationToken)
