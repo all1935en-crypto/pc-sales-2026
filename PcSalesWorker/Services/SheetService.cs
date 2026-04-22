@@ -317,6 +317,9 @@ public sealed class SheetService
         const int sourceAIndex = 0;
         const int sourceJIndex = 9;
         const int insertedKIndex = 10;
+        var today = DateTime.Today;
+        var todayFullLabel = today.ToString("yyyy/M/d", CultureInfo.InvariantCulture);
+        var todaySerial = today.ToOADate();
 
         var rowCount = Math.Max(context.Values.Count, _options.HeaderRow);
         if (rowCount <= 0)
@@ -385,6 +388,36 @@ public sealed class SheetService
                     },
                     PasteType = "PASTE_VALUES"
                 }
+            },
+            new Request
+            {
+                RepeatCell = new RepeatCellRequest
+                {
+                    Range = new GridRange
+                    {
+                        SheetId = context.SheetId,
+                        StartRowIndex = 0,
+                        EndRowIndex = 1,
+                        StartColumnIndex = sourceJIndex,
+                        EndColumnIndex = sourceJIndex + 1
+                    },
+                    Cell = new CellData
+                    {
+                        UserEnteredValue = new ExtendedValue
+                        {
+                            NumberValue = todaySerial
+                        },
+                        UserEnteredFormat = new CellFormat
+                        {
+                            NumberFormat = new NumberFormat
+                            {
+                                Type = "DATE",
+                                Pattern = "M/d"
+                            }
+                        }
+                    },
+                    Fields = "userEnteredValue,userEnteredFormat.numberFormat"
+                }
             }
         };
 
@@ -395,7 +428,7 @@ public sealed class SheetService
 
         var batchRequest = _sheets.Spreadsheets.BatchUpdate(request, _options.SpreadsheetId);
         await batchRequest.ExecuteAsync(cancellationToken);
-        _logger.LogInformation("排名欄位快照完成：已插入 K 欄，並將 J->K、A->J。");
+        _logger.LogInformation("排名欄位快照完成：已插入 K 欄，並將 J->K、A->J，且 J1 設為 {DateLabel}（顯示 M/d）。", todayFullLabel);
     }
 
     public async Task<int> UpdatePcLinkAsync(CancellationToken cancellationToken)
