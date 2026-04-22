@@ -107,8 +107,24 @@ public sealed class Worker : BackgroundService
         {
             var updateMode = GetUpdateMode();
             var updatePcLinkOnly = string.Equals(updateMode, "pc-link", StringComparison.OrdinalIgnoreCase);
+            var updateRankingOnly = string.Equals(updateMode, "ranking", StringComparison.OrdinalIgnoreCase);
+            var updateSalesOnly = string.Equals(updateMode, "sales", StringComparison.OrdinalIgnoreCase);
+            var restoreSales = string.Equals(updateMode, "restore-sales", StringComparison.OrdinalIgnoreCase);
+            var updateAll = string.Equals(updateMode, "all", StringComparison.OrdinalIgnoreCase)
+                || (!updatePcLinkOnly && !updateRankingOnly && !updateSalesOnly && !restoreSales);
 
-            if (updatePcLinkOnly)
+            if (restoreSales)
+            {
+                WriteProgress(new ProgressState
+                {
+                    Total = 0,
+                    Processed = 0,
+                    Status = "running"
+                });
+                var restoredRows = await RestoreSalesRollbackSnapshotAsync(cancellationToken);
+                _logger.LogInformation("銷量回復流程完成，共處理 {Count} 筆。", restoredRows);
+            }
+            else if (updatePcLinkOnly)
             {
                 WriteProgress(new ProgressState
                 {
@@ -121,9 +137,10 @@ public sealed class Worker : BackgroundService
             }
             else
             {
+                var shouldUpdateRanking = updateAll || updateRankingOnly;
+                var shouldUpdateSales = updateAll || updateSalesOnly;
                 var context = await _sheetService.LoadContextAsync(cancellationToken);
                 var rows = _sheetService.ExtractRows(context);
-                var lastRowIndex = rows.Count > 0 ? rows.Max(r => r.RowIndex) : _options.HeaderRow;
                 WriteProgress(new ProgressState
                 {
                     Total = rows.Count,
@@ -140,16 +157,19 @@ public sealed class Worker : BackgroundService
                 var urlIndex = _sheetService.ColumnIndex(context, _options.Columns.Url);
                 var titleIndex = _sheetService.ColumnIndex(context, _options.Columns.Title);
                 var salesIndex = _sheetService.ColumnIndex(context, _options.Columns.Sales30);
-                var updateRankingOnly = string.Equals(updateMode, "ranking", StringComparison.OrdinalIgnoreCase);
-                var updateAll = !updateRankingOnly;
 
-                if (updateAll && (urlColumn == null || titleColumn == null || salesColumn == null))
+                if (shouldUpdateSales && (urlColumn == null || titleColumn == null || salesColumn == null))
                 {
                     throw new InvalidOperationException("工作表缺少必要欄位，請確認欄位名稱。");
                 }
-                if ((updateRankingOnly || updateAll) && rankingColumn == null)
+                if (shouldUpdateRanking && rankingColumn == null)
                 {
                     throw new InvalidOperationException("找不到排名欄位，無法更新排名。");
+                }
+
+                if (updateSalesOnly)
+                {
+                    await CaptureSalesRollbackSnapshotAsync(context, rows, urlIndex, titleIndex, salesIndex, cancellationToken);
                 }
 
                 var processed = 0;
@@ -163,7 +183,7 @@ public sealed class Worker : BackgroundService
                     string? title = null;
                     var titleIsError = false;
 
-                    if (updateAll || updateRankingOnly)
+                    if (shouldUpdateRanking)
                     {
                         try
                         {
@@ -176,7 +196,7 @@ public sealed class Worker : BackgroundService
                         }
                     }
 
-                    if (updateAll)
+                    if (shouldUpdateSales)
                     {
                         title = await _searchService.GetProductTitleRequiredAsync(row.ProductId, row.Keyword, cancellationToken);
                         if (string.IsNullOrWhiteSpace(title))
@@ -200,14 +220,14 @@ public sealed class Worker : BackgroundService
 
                     var productUrl = $"https://24h.pchome.com.tw/prod/{row.ProductId}";
 
-                    if (updateAll)
+                    if (shouldUpdateSales)
                     {
                         AddIfChanged(context, pendingUpdates, resolvedRowIndex, urlColumn, urlIndex, productUrl);
                         AddIfChanged(context, pendingUpdates, resolvedRowIndex, titleColumn, titleIndex, title ?? MissingTitleText);
                         AddIfChanged(context, pendingUpdates, resolvedRowIndex, salesColumn, salesIndex, sales30.HasValue ? sales30.Value : string.Empty);
                         AddTitleTextColorUpdate(pendingTitleTextColorUpdates, resolvedRowIndex, titleIndex, titleIsError);
                     }
-                    if ((updateAll || updateRankingOnly) && rankingColumn != null)
+                    if (shouldUpdateRanking && rankingColumn != null)
                     {
                         AddIfChanged(context, pendingUpdates, resolvedRowIndex, rankingColumn, rankingIndex, ranking.HasValue ? ranking.Value : -100);
                     }
@@ -249,7 +269,6 @@ public sealed class Worker : BackgroundService
                     pendingTitleTextColorUpdates.Clear();
                 }
             }
-
         }
         catch (Exception ex)
         {
@@ -281,10 +300,152 @@ public sealed class Worker : BackgroundService
             return;
         }
 
-        var elapsed = endAt - startAt;
-        var message = $"已完成更新 ʕ•ᴥ•ʔ{Environment.NewLine}共花費{elapsed.Minutes}分鐘{elapsed.Seconds}秒";
-        MessageBox.Show(message, "完成", MessageBoxButtons.OK, MessageBoxIcon.Information, MessageBoxDefaultButton.Button1, MessageBoxOptions.DefaultDesktopOnly);
+        if (ShouldShowCompletionMessage())
+        {
+            var elapsed = endAt - startAt;
+            var message = $"已完成更新 ʕ•ᴥ•ʔ{Environment.NewLine}共花費{elapsed.Minutes}分鐘{elapsed.Seconds}秒";
+            MessageBox.Show(message, "完成", MessageBoxButtons.OK, MessageBoxIcon.Information, MessageBoxDefaultButton.Button1, MessageBoxOptions.DefaultDesktopOnly);
+        }
         return;
+    }
+
+    private async Task CaptureSalesRollbackSnapshotAsync(
+        SheetContext context,
+        IReadOnlyList<SheetRow> rows,
+        int? urlIndex,
+        int? titleIndex,
+        int? salesIndex,
+        CancellationToken cancellationToken)
+    {
+        if (urlIndex is null or < 0 || titleIndex is null or < 0 || salesIndex is null or < 0)
+        {
+            throw new InvalidOperationException("建立回復快照失敗：缺少網址/標題/30日銷量欄位。");
+        }
+
+        var snapshot = new SalesRollbackSnapshot
+        {
+            CapturedAt = DateTimeOffset.Now,
+            Rows = new List<SalesRollbackRow>(rows.Count)
+        };
+
+        foreach (var row in rows)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var resolvedRowIndex = _sheetService.ResolveRowIndex(context, row.ProductId, row.RowIndex);
+            snapshot.Rows.Add(new SalesRollbackRow
+            {
+                RowIndex = resolvedRowIndex,
+                ProductId = row.ProductId,
+                Url = GetCellValue(context, resolvedRowIndex, urlIndex.Value),
+                Title = GetCellValue(context, resolvedRowIndex, titleIndex.Value),
+                Sales30 = GetCellValue(context, resolvedRowIndex, salesIndex.Value)
+            });
+        }
+
+        SaveSalesRollbackSnapshot(snapshot);
+        _logger.LogInformation("已建立銷量回復快照，共 {Count} 筆。", snapshot.Rows.Count);
+    }
+
+    private async Task<int> RestoreSalesRollbackSnapshotAsync(CancellationToken cancellationToken)
+    {
+        var snapshotPath = ResolveSalesRollbackPath();
+        if (!File.Exists(snapshotPath))
+        {
+            _logger.LogInformation("找不到可回復的銷量快照，略過回復。");
+            return 0;
+        }
+
+        SalesRollbackSnapshot? snapshot;
+        try
+        {
+            var json = await File.ReadAllTextAsync(snapshotPath, cancellationToken);
+            snapshot = JsonSerializer.Deserialize<SalesRollbackSnapshot>(json);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException("讀取銷量回復快照失敗。", ex);
+        }
+
+        if (snapshot?.Rows == null || snapshot.Rows.Count == 0)
+        {
+            TryDeleteSalesRollbackSnapshot(snapshotPath);
+            _logger.LogInformation("銷量快照為空，已清除快照檔。");
+            return 0;
+        }
+
+        var context = await _sheetService.LoadContextAsync(cancellationToken);
+        var urlColumn = _sheetService.ColumnLetter(context, _options.Columns.Url);
+        var titleColumn = _sheetService.ColumnLetter(context, _options.Columns.Title);
+        var salesColumn = _sheetService.ColumnLetter(context, _options.Columns.Sales30);
+        var urlIndex = _sheetService.ColumnIndex(context, _options.Columns.Url);
+        var titleIndex = _sheetService.ColumnIndex(context, _options.Columns.Title);
+        var salesIndex = _sheetService.ColumnIndex(context, _options.Columns.Sales30);
+
+        if (urlColumn == null || titleColumn == null || salesColumn == null
+            || urlIndex is null or < 0 || titleIndex is null or < 0 || salesIndex is null or < 0)
+        {
+            throw new InvalidOperationException("回復銷量快照失敗：工作表缺少網址/標題/30日銷量欄位。");
+        }
+
+        var pendingUpdates = new List<SheetUpdate>();
+        foreach (var row in snapshot.Rows)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var resolvedRowIndex = string.IsNullOrWhiteSpace(row.ProductId)
+                ? row.RowIndex
+                : _sheetService.ResolveRowIndex(context, row.ProductId, row.RowIndex);
+
+            AddIfChanged(context, pendingUpdates, resolvedRowIndex, urlColumn, urlIndex, row.Url ?? string.Empty);
+            AddIfChanged(context, pendingUpdates, resolvedRowIndex, titleColumn, titleIndex, row.Title ?? string.Empty);
+            AddIfChanged(context, pendingUpdates, resolvedRowIndex, salesColumn, salesIndex, row.Sales30 ?? string.Empty);
+
+            if (pendingUpdates.Count >= 300)
+            {
+                await _sheetService.ApplyUpdatesAsync(context, pendingUpdates, null, cancellationToken);
+                pendingUpdates.Clear();
+            }
+        }
+
+        if (pendingUpdates.Count > 0)
+        {
+            await _sheetService.ApplyUpdatesAsync(context, pendingUpdates, null, cancellationToken);
+            pendingUpdates.Clear();
+        }
+
+        TryDeleteSalesRollbackSnapshot(snapshotPath);
+        return snapshot.Rows.Count;
+    }
+
+    private static void SaveSalesRollbackSnapshot(SalesRollbackSnapshot snapshot)
+    {
+        var path = ResolveSalesRollbackPath();
+        var directory = Path.GetDirectoryName(path);
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            throw new InvalidOperationException("找不到銷量快照儲存路徑。");
+        }
+
+        Directory.CreateDirectory(directory);
+        var options = new JsonSerializerOptions { WriteIndented = true };
+        var json = JsonSerializer.Serialize(snapshot, options);
+        var tempPath = $"{path}.tmp";
+        File.WriteAllText(tempPath, json);
+        File.Move(tempPath, path, true);
+    }
+
+    private void TryDeleteSalesRollbackSnapshot(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "刪除銷量快照檔失敗：{Path}", path);
+        }
     }
 
     private static void WriteProgress(ProgressState state)

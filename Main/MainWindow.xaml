@@ -6,7 +6,8 @@
         mc:Ignorable="d"
         Title="開發初始設定"
         Width="480"
-        Height="500"
+        Height="1000"
+        Loaded="OnWindowLoaded"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None"
         AllowsTransparency="True"
@@ -197,32 +198,28 @@
                         </StackPanel>
                     </Border>
 
+                    <CheckBox x:Name="AutoStartupCheckBox"
+                              Content="啟動時自動更新PC連結與排名"
+                              FontSize="16"
+                              Margin="0,4,0,0"
+                              Foreground="#1C1C1E"
+                              Checked="OnAutoStartupCheckedChanged"
+                              Unchecked="OnAutoStartupCheckedChanged" />
+
 					<StackPanel Orientation="Horizontal"
                                 HorizontalAlignment="Center"
                                 Margin="0,24,0,16">
-						<Button Content="排名"
-                                Style="{StaticResource SecondaryButtonStyle}"
-                                FontSize="16"
-                                Padding="22,10"
-                                Margin="0,0,12,0"
-                                Click="OnUpdateRankingClick" />
-						<Button Content="開始"
+						<Button Content="更新銷量"
                                 Style="{StaticResource PrimaryButtonStyle}"
                                 FontSize="16"
                                 Padding="22,10"
                                 Margin="0,0,12,0"
-                                Click="OnStartClick" />
-						<Button Content="清除"
+                                Click="OnUpdateSalesClick" />
+						<Button Content="取消"
                                 Style="{StaticResource SecondaryButtonStyle}"
                                 FontSize="16"
                                 Padding="22,10"
-                                Margin="0,0,12,0"
-                                Click="OnTerminateClick" />
-                        <Button Content="更新PC連結"
-                                Style="{StaticResource SecondaryButtonStyle}"
-                                FontSize="16"
-                                Padding="22,10"
-                                Click="OnUpdatePcLinkClick" />
+                                Click="OnCancelClick" />
                     </StackPanel>
                 </StackPanel>
             </ScrollViewer>
