@@ -230,9 +230,95 @@ public partial class MainWindow : Window
 
     private async Task ShowAutoStartupCompletedAndCloseAsync()
     {
-        MessageBox.Show("已完成啟動時自動更新。按下確定後，程式將在 1 分鐘後自動關閉。", "完成", MessageBoxButton.OK, MessageBoxImage.Information);
-        await Task.Delay(TimeSpan.FromMinutes(1));
-        Dispatcher.Invoke(Close);
+        const string message = "已完成PC排名與PC連結更新，程式30秒後自動關閉 ʕ•ᴥ•ʔ";
+        var noticeWindow = CreateAutoCloseNoticeWindow(message);
+        noticeWindow.Owner = this;
+        noticeWindow.Show();
+
+        var noticeTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(10)
+        };
+        noticeTimer.Tick += (_, _) =>
+        {
+            noticeTimer.Stop();
+            if (noticeWindow.IsVisible)
+            {
+                noticeWindow.Close();
+            }
+        };
+        noticeTimer.Start();
+
+        await Task.Delay(TimeSpan.FromSeconds(30));
+        if (noticeWindow.IsVisible)
+        {
+            noticeWindow.Close();
+        }
+
+        if (IsVisible)
+        {
+            Close();
+        }
+    }
+
+    private static Window CreateAutoCloseNoticeWindow(string message)
+    {
+        var outerBorder = new Border
+        {
+            CornerRadius = new CornerRadius(18),
+            Background = new SolidColorBrush(Color.FromRgb(242, 242, 242)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(209, 209, 214)),
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(16)
+        };
+
+        var card = new Border
+        {
+            Background = Brushes.White,
+            CornerRadius = new CornerRadius(16),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(236, 236, 236)),
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(18)
+        };
+
+        var text = new TextBlock
+        {
+            Text = message,
+            FontSize = 16,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = new SolidColorBrush(Color.FromRgb(28, 28, 30)),
+            TextWrapping = TextWrapping.Wrap,
+            TextAlignment = TextAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+
+        card.Child = text;
+        outerBorder.Child = card;
+
+        var window = new Window
+        {
+            Title = "完成",
+            Width = 430,
+            Height = 170,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            WindowStyle = WindowStyle.None,
+            AllowsTransparency = true,
+            Background = Brushes.Transparent,
+            ResizeMode = ResizeMode.NoResize,
+            ShowInTaskbar = false,
+            Topmost = true,
+            Content = outerBorder,
+            FontFamily = new FontFamily("Segoe UI"),
+            UseLayoutRounding = true,
+            SnapsToDevicePixels = true
+        };
+
+        TextOptions.SetTextFormattingMode(window, TextFormattingMode.Display);
+        TextOptions.SetTextRenderingMode(window, TextRenderingMode.ClearType);
+        TextOptions.SetTextHintingMode(window, TextHintingMode.Fixed);
+
+        return window;
     }
 
     private bool TryStopRunningWorker()
