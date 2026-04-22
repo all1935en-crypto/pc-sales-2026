@@ -1,10 +1,12 @@
 using System;
-using System.IO;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -17,8 +19,13 @@ public partial class MainWindow : Window
 {
     private Process? _workerProcess;
     private readonly DispatcherTimer _progressTimer;
+    private readonly Queue<StartupTask> _startupQueue = new();
     private string? _progressFilePath;
     private bool _suppressNextWorkerExitError;
+    private bool _windowInitialized;
+    private bool _autoStartupRunning;
+    private int _autoStartupProgressEvery = 10;
+    private bool _autoCloseAfterAutoStartup;
 
     public MainWindow()
     {
@@ -31,6 +38,26 @@ public partial class MainWindow : Window
         };
         _progressTimer.Tick += OnProgressTick;
         _progressFilePath = ResolveProgressPath();
+    }
+
+    private void OnWindowLoaded(object sender, RoutedEventArgs e)
+    {
+        if (_windowInitialized)
+        {
+            return;
+        }
+
+        _windowInitialized = true;
+        LoadUiSettings();
+        if (AutoStartupCheckBox.IsChecked == true)
+        {
+            _autoCloseAfterAutoStartup = true;
+            BeginAutoStartup();
+        }
+        else
+        {
+            _autoCloseAfterAutoStartup = false;
+        }
     }
 
     private static void CleanupLogsIfNeeded()
@@ -80,7 +107,7 @@ public partial class MainWindow : Window
         WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
     }
 
-    private void OnStartClick(object sender, RoutedEventArgs e)
+    private void OnUpdateSalesClick(object sender, RoutedEventArgs e)
     {
         var selected = MaxPagesCombo.SelectedItem as int? ?? 20;
         var progressEvery = ProgressEveryCombo.SelectedItem as int? ?? 10;
@@ -91,72 +118,142 @@ public partial class MainWindow : Window
             StatusText.Text = "設定檔寫入失敗，改用暫時參數啟動";
         }
 
-        if (!TryStartWorker(updateMode: "all", progressEvery: progressEvery, maxPages: selected))
+        if (!TryStartWorker(updateMode: "sales", progressEvery: progressEvery, maxPages: selected, showCompletionMessage: true))
         {
             StatusText.Text = "啟動失敗";
             return;
         }
 
-        StatusText.Text = $"已啟動（最大頁數 {selected}）";
+        StatusText.Text = $"更新銷量中（最大頁數 {selected}）";
+        ProgressText.Text = "進度：處理中";
         StartProgressTimer();
     }
 
-    private void OnUpdateRankingClick(object sender, RoutedEventArgs e)
+    private async void OnCancelClick(object sender, RoutedEventArgs e)
     {
+        _autoStartupRunning = false;
+        _startupQueue.Clear();
+        _autoCloseAfterAutoStartup = false;
+
+        var stopped = TryStopRunningWorker();
+        StatusText.Text = stopped ? "已停止目前工作，回復資料中..." : "沒有執行中的工作，檢查回復資料中...";
+        ProgressText.Text = "進度：回復中";
+
+        var progressEvery = ProgressEveryCombo.SelectedItem as int? ?? 10;
+        var rollbackPath = ResolveSalesRollbackPath();
+        var hasRollbackSnapshot = !string.IsNullOrWhiteSpace(rollbackPath) && File.Exists(rollbackPath);
+        var result = await Task.Run(() => RunWorkerOnce("restore-sales", progressEvery, maxPages: null, showCompletionMessage: false));
+        if (!result.Success)
+        {
+            StatusText.Text = "取消後回復失敗";
+            var detail = string.IsNullOrWhiteSpace(result.Detail) ? "未知錯誤" : result.Detail;
+            MessageBox.Show($"取消後回復失敗：{Environment.NewLine}{detail}", "回復失敗", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
+        if (hasRollbackSnapshot)
+        {
+            StatusText.Text = "已取消並回復到更新前資料";
+            ProgressText.Text = "進度：已回復";
+            return;
+        }
+
+        StatusText.Text = "已取消，目前沒有可回復資料";
+        ProgressText.Text = "進度：已停止";
+    }
+
+    private void OnAutoStartupCheckedChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_windowInitialized)
+        {
+            return;
+        }
+
+        TrySaveUiSettings(AutoStartupCheckBox.IsChecked == true);
+    }
+
+    private void BeginAutoStartup()
+    {
+        if (_autoStartupRunning)
+        {
+            return;
+        }
+
         var selected = MaxPagesCombo.SelectedItem as int? ?? 20;
         var progressEvery = ProgressEveryCombo.SelectedItem as int? ?? 10;
-        StatusText.Text = "啟動中...";
+        _autoStartupProgressEvery = progressEvery;
         var updated = TryUpdateMaxPages(selected);
         if (!updated)
         {
             StatusText.Text = "設定檔寫入失敗，改用暫時參數啟動";
         }
 
-        if (!TryStartWorker(updateMode: "ranking", progressEvery: progressEvery, maxPages: selected))
+        _startupQueue.Clear();
+        _startupQueue.Enqueue(new StartupTask("ranking", $"啟動時自動更新：排名（最大頁數 {selected}）", selected));
+        _startupQueue.Enqueue(new StartupTask("pc-link", "啟動時自動更新：PC連結", null));
+        _autoStartupRunning = true;
+        StartNextAutoStartupTask();
+    }
+
+    private void StartNextAutoStartupTask()
+    {
+        if (!_autoStartupRunning)
         {
-            StatusText.Text = "啟動失敗";
             return;
         }
 
-        StatusText.Text = $"更新排名（最大頁數 {selected}）";
+        if (_startupQueue.Count == 0)
+        {
+            _autoStartupRunning = false;
+            StatusText.Text = "啟動時自動更新完成";
+            ProgressText.Text = "進度：已完成";
+            if (_autoCloseAfterAutoStartup)
+            {
+                _ = ShowAutoStartupCompletedAndCloseAsync();
+            }
+            return;
+        }
+
+        var task = _startupQueue.Dequeue();
+        if (!TryStartWorker(task.Mode, _autoStartupProgressEvery, task.MaxPages, showCompletionMessage: false))
+        {
+            _autoStartupRunning = false;
+            _startupQueue.Clear();
+            StatusText.Text = "啟動時自動更新失敗";
+            return;
+        }
+
+        StatusText.Text = task.StatusText;
+        ProgressText.Text = "進度：處理中";
         StartProgressTimer();
     }
 
-    private void OnTerminateClick(object sender, RoutedEventArgs e)
+    private async Task ShowAutoStartupCompletedAndCloseAsync()
+    {
+        MessageBox.Show("已完成啟動時自動更新。按下確定後，程式將在 1 分鐘後自動關閉。", "完成", MessageBoxButton.OK, MessageBoxImage.Information);
+        await Task.Delay(TimeSpan.FromMinutes(1));
+        Dispatcher.Invoke(Close);
+    }
+
+    private bool TryStopRunningWorker()
     {
         try
         {
             if (_workerProcess == null || _workerProcess.HasExited)
             {
-                StatusText.Text = "目前沒有執行中的工作";
-                return;
+                return false;
             }
 
             _suppressNextWorkerExitError = true;
             _workerProcess.Kill(true);
-            StatusText.Text = "已終止執行中的工作";
-            ProgressText.Text = "進度：已終止";
+            return true;
         }
-        catch
+        catch (Exception ex)
         {
             _suppressNextWorkerExitError = false;
-            StatusText.Text = "終止失敗";
+            MessageBox.Show($"停止工作失敗：{ex.Message}", "取消失敗", MessageBoxButton.OK, MessageBoxImage.Error);
+            return false;
         }
-    }
-
-    private void OnUpdatePcLinkClick(object sender, RoutedEventArgs e)
-    {
-        var progressEvery = ProgressEveryCombo.SelectedItem as int? ?? 10;
-        StatusText.Text = "啟動中...";
-        if (!TryStartWorker(updateMode: "pc-link", progressEvery: progressEvery, maxPages: null))
-        {
-            StatusText.Text = "啟動失敗";
-            return;
-        }
-
-        StatusText.Text = "更新PC連結中";
-        ProgressText.Text = "進度：處理中";
-        StartProgressTimer();
     }
 
     private void OnWindowMouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
@@ -233,6 +330,63 @@ public partial class MainWindow : Window
         ProgressEveryCombo.SelectedItem = 10;
     }
 
+    private void LoadUiSettings()
+    {
+        try
+        {
+            var path = ResolveUiSettingsPath();
+            if (path == null || !File.Exists(path))
+            {
+                AutoStartupCheckBox.IsChecked = false;
+                return;
+            }
+
+            var json = File.ReadAllText(path);
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                AutoStartupCheckBox.IsChecked = false;
+                return;
+            }
+
+            var settings = JsonSerializer.Deserialize<UiSettings>(json);
+            AutoStartupCheckBox.IsChecked = settings?.AutoStartupEnabled ?? false;
+        }
+        catch
+        {
+            AutoStartupCheckBox.IsChecked = false;
+        }
+    }
+
+    private void TrySaveUiSettings(bool autoStartupEnabled)
+    {
+        try
+        {
+            var path = ResolveUiSettingsPath();
+            if (path == null)
+            {
+                return;
+            }
+
+            var directory = Path.GetDirectoryName(path);
+            if (string.IsNullOrWhiteSpace(directory))
+            {
+                return;
+            }
+
+            Directory.CreateDirectory(directory);
+            var settings = new UiSettings
+            {
+                AutoStartupEnabled = autoStartupEnabled
+            };
+            var json = JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(path, json);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"儲存自動更新設定失敗：{ex.Message}", "設定失敗", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
     private int? TryReadMaxPages()
     {
         try
@@ -286,7 +440,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private bool TryStartWorker(string updateMode, int progressEvery, int? maxPages)
+    private bool TryStartWorker(string updateMode, int progressEvery, int? maxPages, bool showCompletionMessage)
     {
         try
         {
@@ -301,40 +455,17 @@ public partial class MainWindow : Window
             if (_workerProcess != null && !_workerProcess.HasExited)
             {
                 StatusText.Text = "已有執行中的工作";
-                MessageBox.Show("目前已有執行中的工作，請先按「清除」或等待完成。", "啟動失敗", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show("目前已有執行中的工作，請先按「取消」或等待完成。", "啟動失敗", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return false;
             }
 
             var errorBuffer = new StringBuilder();
-            var psi = new ProcessStartInfo
+            var process = new Process
             {
-                FileName = "dotnet",
-                Arguments = "run --project PcSalesWorker",
-                WorkingDirectory = root,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                StandardOutputEncoding = Encoding.UTF8,
-                StandardErrorEncoding = Encoding.UTF8
-            };
-            psi.Environment["RUN_ONCE"] = "1";
-            psi.Environment["UPDATE_MODE"] = updateMode;
-            psi.Environment["PROGRESS_EVERY"] = progressEvery.ToString();
-            psi.Environment["BRING_BROWSER_FRONT"] = "1";
-            psi.Environment["DOTNET_CLI_FORCE_UTF8_ENCODING"] = "1";
-            psi.Environment["DOTNET_CLI_UI_LANGUAGE"] = "zh-Hant";
-            if (maxPages.HasValue)
-            {
-                psi.Environment["APP__SEARCH__MAXPAGES"] = maxPages.Value.ToString();
-            }
-
-            _workerProcess = new Process
-            {
-                StartInfo = psi,
+                StartInfo = BuildWorkerProcessStartInfo(root, updateMode, progressEvery, maxPages, showCompletionMessage),
                 EnableRaisingEvents = true
             };
-            _workerProcess.OutputDataReceived += (_, args) =>
+            process.OutputDataReceived += (_, args) =>
             {
                 if (string.IsNullOrWhiteSpace(args.Data))
                 {
@@ -343,7 +474,7 @@ public partial class MainWindow : Window
 
                 AppendLineWithLimit(errorBuffer, args.Data);
             };
-            _workerProcess.ErrorDataReceived += (_, args) =>
+            process.ErrorDataReceived += (_, args) =>
             {
                 if (string.IsNullOrWhiteSpace(args.Data))
                 {
@@ -352,65 +483,37 @@ public partial class MainWindow : Window
 
                 AppendLineWithLimit(errorBuffer, args.Data);
             };
-            _workerProcess.Exited += (_, _) =>
-            {
-                Dispatcher.Invoke(() =>
-                {
-                    if (_workerProcess == null)
-                    {
-                        return;
-                    }
+            process.Exited += (_, _) => Dispatcher.Invoke(() => OnWorkerExited(process, errorBuffer));
 
-                    if (_suppressNextWorkerExitError)
-                    {
-                        _suppressNextWorkerExitError = false;
-                        return;
-                    }
-
-                    if (_workerProcess.ExitCode == 0)
-                    {
-                        return;
-                    }
-
-                    StatusText.Text = $"更新程序異常結束（{_workerProcess.ExitCode}）";
-                    var detail = ReadErrorPreview(errorBuffer);
-                    if (string.IsNullOrWhiteSpace(detail))
-                    {
-                        MessageBox.Show($"更新程序異常結束（ExitCode={_workerProcess.ExitCode}）。", "啟動失敗", MessageBoxButton.OK, MessageBoxImage.Error);
-                        return;
-                    }
-
-                    MessageBox.Show($"更新程序異常結束（ExitCode={_workerProcess.ExitCode}）：{Environment.NewLine}{detail}", "啟動失敗", MessageBoxButton.OK, MessageBoxImage.Error);
-                });
-            };
-
-            if (!_workerProcess.Start())
+            if (!process.Start())
             {
                 MessageBox.Show("無法啟動更新程序。", "啟動失敗", MessageBoxButton.OK, MessageBoxImage.Error);
                 return false;
             }
-            _workerProcess.BeginOutputReadLine();
-            _workerProcess.BeginErrorReadLine();
+
+            _workerProcess = process;
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
 
             try
             {
-                _workerProcess.WaitForExit(300);
+                process.WaitForExit(300);
             }
             catch
             {
                 // ignore
             }
 
-            if (_workerProcess.HasExited)
+            if (process.HasExited && process.ExitCode != 0)
             {
                 var detail = ReadErrorPreview(errorBuffer);
                 if (string.IsNullOrWhiteSpace(detail))
                 {
-                    MessageBox.Show($"更新程序啟動後立即結束（ExitCode={_workerProcess.ExitCode}）。", "啟動失敗", MessageBoxButton.OK, MessageBoxImage.Error);
+                    MessageBox.Show($"更新程序啟動後立即結束（ExitCode={process.ExitCode}）。", "啟動失敗", MessageBoxButton.OK, MessageBoxImage.Error);
                     return false;
                 }
 
-                MessageBox.Show($"更新程序啟動後立即結束（ExitCode={_workerProcess.ExitCode}）：{Environment.NewLine}{detail}", "啟動失敗", MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show($"更新程序啟動後立即結束（ExitCode={process.ExitCode}）：{Environment.NewLine}{detail}", "啟動失敗", MessageBoxButton.OK, MessageBoxImage.Error);
                 return false;
             }
 
@@ -422,6 +525,140 @@ public partial class MainWindow : Window
             MessageBox.Show($"啟動失敗：{ex.Message}", "啟動失敗", MessageBoxButton.OK, MessageBoxImage.Error);
             return false;
         }
+    }
+
+    private WorkerRunResult RunWorkerOnce(string updateMode, int progressEvery, int? maxPages, bool showCompletionMessage)
+    {
+        try
+        {
+            var root = ResolveProjectRoot();
+            if (root == null)
+            {
+                return new WorkerRunResult(false, "找不到專案路徑。");
+            }
+
+            var errorBuffer = new StringBuilder();
+            using var process = new Process
+            {
+                StartInfo = BuildWorkerProcessStartInfo(root, updateMode, progressEvery, maxPages, showCompletionMessage)
+            };
+            process.OutputDataReceived += (_, args) =>
+            {
+                if (string.IsNullOrWhiteSpace(args.Data))
+                {
+                    return;
+                }
+
+                AppendLineWithLimit(errorBuffer, args.Data);
+            };
+            process.ErrorDataReceived += (_, args) =>
+            {
+                if (string.IsNullOrWhiteSpace(args.Data))
+                {
+                    return;
+                }
+
+                AppendLineWithLimit(errorBuffer, args.Data);
+            };
+
+            if (!process.Start())
+            {
+                return new WorkerRunResult(false, "無法啟動更新程序。");
+            }
+
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+            process.WaitForExit();
+            if (process.ExitCode == 0)
+            {
+                return new WorkerRunResult(true, ReadErrorPreview(errorBuffer));
+            }
+
+            var detail = ReadErrorPreview(errorBuffer);
+            if (string.IsNullOrWhiteSpace(detail))
+            {
+                detail = $"更新程序結束（ExitCode={process.ExitCode}）。";
+            }
+            return new WorkerRunResult(false, detail);
+        }
+        catch (Exception ex)
+        {
+            return new WorkerRunResult(false, ex.Message);
+        }
+    }
+
+    private static ProcessStartInfo BuildWorkerProcessStartInfo(
+        string root,
+        string updateMode,
+        int progressEvery,
+        int? maxPages,
+        bool showCompletionMessage)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            Arguments = "run --project PcSalesWorker",
+            WorkingDirectory = root,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
+        };
+
+        psi.Environment["RUN_ONCE"] = "1";
+        psi.Environment["UPDATE_MODE"] = updateMode;
+        psi.Environment["PROGRESS_EVERY"] = progressEvery.ToString();
+        psi.Environment["BRING_BROWSER_FRONT"] = "1";
+        psi.Environment["DOTNET_CLI_FORCE_UTF8_ENCODING"] = "1";
+        psi.Environment["DOTNET_CLI_UI_LANGUAGE"] = "zh-Hant";
+        psi.Environment["SHOW_COMPLETION_MESSAGE"] = showCompletionMessage ? "1" : "0";
+        if (maxPages.HasValue)
+        {
+            psi.Environment["APP__SEARCH__MAXPAGES"] = maxPages.Value.ToString();
+        }
+
+        return psi;
+    }
+
+    private void OnWorkerExited(Process process, StringBuilder errorBuffer)
+    {
+        if (!ReferenceEquals(_workerProcess, process))
+        {
+            return;
+        }
+
+        if (_suppressNextWorkerExitError)
+        {
+            _suppressNextWorkerExitError = false;
+            return;
+        }
+
+        if (process.ExitCode != 0)
+        {
+            _autoStartupRunning = false;
+            _startupQueue.Clear();
+            _autoCloseAfterAutoStartup = false;
+            StatusText.Text = $"更新程序異常結束（{process.ExitCode}）";
+            var detail = ReadErrorPreview(errorBuffer);
+            if (string.IsNullOrWhiteSpace(detail))
+            {
+                MessageBox.Show($"更新程序異常結束（ExitCode={process.ExitCode}）。", "啟動失敗", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+
+            MessageBox.Show($"更新程序異常結束（ExitCode={process.ExitCode}）：{Environment.NewLine}{detail}", "啟動失敗", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
+        if (_autoStartupRunning)
+        {
+            StartNextAutoStartupTask();
+            return;
+        }
+
+        StatusText.Text = "更新完成";
     }
 
     private void StartProgressTimer()
@@ -492,6 +729,28 @@ public partial class MainWindow : Window
         return Path.Combine(root, "logs", "progress.json");
     }
 
+    private static string? ResolveUiSettingsPath()
+    {
+        var root = ResolveProjectRoot();
+        if (root == null)
+        {
+            return null;
+        }
+
+        return Path.Combine(root, "logs", "main-ui-settings.json");
+    }
+
+    private static string? ResolveSalesRollbackPath()
+    {
+        var root = ResolveProjectRoot();
+        if (root == null)
+        {
+            return null;
+        }
+
+        return Path.Combine(root, "logs", "sales-rollback.json");
+    }
+
     private static string? ResolveAppSettingsPath()
     {
         var root = ResolveProjectRoot();
@@ -557,5 +816,36 @@ public partial class MainWindow : Window
         public int RowIndex { get; set; }
         public string? ProductId { get; set; }
         public string? Status { get; set; }
+    }
+
+    private sealed class StartupTask
+    {
+        public StartupTask(string mode, string statusText, int? maxPages)
+        {
+            Mode = mode;
+            StatusText = statusText;
+            MaxPages = maxPages;
+        }
+
+        public string Mode { get; }
+        public string StatusText { get; }
+        public int? MaxPages { get; }
+    }
+
+    private sealed class UiSettings
+    {
+        public bool AutoStartupEnabled { get; set; }
+    }
+
+    private sealed class WorkerRunResult
+    {
+        public WorkerRunResult(bool success, string detail)
+        {
+            Success = success;
+            Detail = detail;
+        }
+
+        public bool Success { get; }
+        public string Detail { get; }
     }
 }

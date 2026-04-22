@@ -17,7 +17,7 @@ public sealed class SheetService
     private const string PcLinkSheetFallbackName = "PC連結";
     private const string SalesSpreadsheetId = "1JdEZdgzdq3YIkT2X6fPirlLa1AYJPdbzf9AmHFehH5E";
     private const int SalesSheetId = 0;
-    private const string SalesSheetFallbackName = "2026年PC銷量";
+    private const string SalesSheetFallbackName = "2026年PC曝光";
 
     private readonly ILogger<SheetService> _logger;
     private readonly AppOptions _options;
@@ -311,6 +311,93 @@ public sealed class SheetService
         await formatBatchRequest.ExecuteAsync(cancellationToken);
     }
 
+    public async Task RotateRankingSnapshotColumnsAsync(SheetContext context, CancellationToken cancellationToken)
+    {
+        // A=0, J=9, K=10
+        const int sourceAIndex = 0;
+        const int sourceJIndex = 9;
+        const int insertedKIndex = 10;
+
+        var rowCount = Math.Max(context.Values.Count, _options.HeaderRow);
+        if (rowCount <= 0)
+        {
+            rowCount = 1;
+        }
+
+        var requests = new List<Request>
+        {
+            new Request
+            {
+                InsertDimension = new InsertDimensionRequest
+                {
+                    Range = new DimensionRange
+                    {
+                        SheetId = context.SheetId,
+                        Dimension = "COLUMNS",
+                        StartIndex = insertedKIndex,
+                        EndIndex = insertedKIndex + 1
+                    },
+                    InheritFromBefore = false
+                }
+            },
+            new Request
+            {
+                CopyPaste = new CopyPasteRequest
+                {
+                    Source = new GridRange
+                    {
+                        SheetId = context.SheetId,
+                        StartRowIndex = 0,
+                        EndRowIndex = rowCount,
+                        StartColumnIndex = sourceJIndex,
+                        EndColumnIndex = sourceJIndex + 1
+                    },
+                    Destination = new GridRange
+                    {
+                        SheetId = context.SheetId,
+                        StartRowIndex = 0,
+                        EndRowIndex = rowCount,
+                        StartColumnIndex = insertedKIndex,
+                        EndColumnIndex = insertedKIndex + 1
+                    },
+                    PasteType = "PASTE_VALUES"
+                }
+            },
+            new Request
+            {
+                CopyPaste = new CopyPasteRequest
+                {
+                    Source = new GridRange
+                    {
+                        SheetId = context.SheetId,
+                        StartRowIndex = 0,
+                        EndRowIndex = rowCount,
+                        StartColumnIndex = sourceAIndex,
+                        EndColumnIndex = sourceAIndex + 1
+                    },
+                    Destination = new GridRange
+                    {
+                        SheetId = context.SheetId,
+                        StartRowIndex = 0,
+                        EndRowIndex = rowCount,
+                        StartColumnIndex = sourceJIndex,
+                        EndColumnIndex = sourceJIndex + 1
+                    },
+                    PasteType = "PASTE_VALUES"
+                }
+            }
+        };
+
+        var request = new BatchUpdateSpreadsheetRequest
+        {
+            Requests = requests
+        };
+
+        var batchRequest = _sheets.Spreadsheets.BatchUpdate(request, _options.SpreadsheetId);
+        await batchRequest.ExecuteAsync(cancellationToken);
+        _logger.LogInformation("排名欄位快照完成：已插入 K 欄，並將 J->K、A->J。");
+    }
+
     public async Task<int> UpdatePcLinkAsync(CancellationToken cancellationToken)
     {
         var pcLinkSheetName = await ResolveSheetNameAsync(
@@ -389,7 +476,7 @@ public sealed class SheetService
 
         if (updates.Count == 0)
         {
-            _logger.LogInformation("PC連結表空白 G 欄共 {Count} 筆，沒有任何商品 ID 命中 2026年PC銷量 F 欄。", pendingRows.Count);
+            _logger.LogInformation("PC連結表空白 G 欄共 {Count} 筆，沒有任何商品 ID 命中 2026年PC曝光 F 欄。", pendingRows.Count);
             return 0;
         }
 

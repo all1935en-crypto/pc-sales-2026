@@ -117,7 +117,7 @@
                                 Click="OnMaximizeClick" />
                     </StackPanel>
 
-					<TextBlock Text="2026年PC銷量自動化"
+					<TextBlock Text="2026年PC曝光自動化"
                                FontSize="28"
                                FontWeight="Bold"
                                Foreground="#1C1C1E"

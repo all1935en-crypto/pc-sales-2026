@@ -268,6 +268,11 @@ public sealed class Worker : BackgroundService
                     pendingUpdates.Clear();
                     pendingTitleTextColorUpdates.Clear();
                 }
+
+                if (shouldUpdateRanking)
+                {
+                    await _sheetService.RotateRankingSnapshotColumnsAsync(context, cancellationToken);
+                }
             }
         }
         catch (Exception ex)
@@ -481,6 +486,12 @@ public sealed class Worker : BackgroundService
         return AppContext.BaseDirectory;
     }
 
+    private static string ResolveSalesRollbackPath()
+    {
+        var root = ResolveProjectRoot();
+        return Path.Combine(root, "logs", "sales-rollback.json");
+    }
+
     private sealed class ProgressState
     {
         public int Total { get; set; }
@@ -608,6 +619,18 @@ public sealed class Worker : BackgroundService
         => string.Equals(Environment.GetEnvironmentVariable("PAUSE_BEFORE_SEARCH"), "1", StringComparison.OrdinalIgnoreCase)
             || string.Equals(Environment.GetEnvironmentVariable("PAUSE_BEFORE_SEARCH"), "true", StringComparison.OrdinalIgnoreCase);
 
+    private static bool ShouldShowCompletionMessage()
+    {
+        var raw = Environment.GetEnvironmentVariable("SHOW_COMPLETION_MESSAGE");
+        if (string.Equals(raw, "0", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(raw, "false", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
     private static string GetUpdateMode()
     {
         var mode = Environment.GetEnvironmentVariable("UPDATE_MODE");
@@ -624,5 +647,20 @@ public sealed class Worker : BackgroundService
         }
 
         return "all";
+    }
+
+    private sealed class SalesRollbackSnapshot
+    {
+        public DateTimeOffset CapturedAt { get; set; }
+        public List<SalesRollbackRow> Rows { get; set; } = new();
+    }
+
+    private sealed class SalesRollbackRow
+    {
+        public int RowIndex { get; set; }
+        public string ProductId { get; set; } = string.Empty;
+        public string Url { get; set; } = string.Empty;
+        public string Title { get; set; } = string.Empty;
+        public string Sales30 { get; set; } = string.Empty;
     }
 }
