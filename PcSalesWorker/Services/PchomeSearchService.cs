@@ -119,6 +119,18 @@ public sealed class PchomeSearchService
         }
 
         var html = await response.Content.ReadAsStringAsync(cancellationToken);
+        var pageHeading = NormalizeTitle(HtmlExtractProductHeading(html));
+        if (!string.IsNullOrWhiteSpace(pageHeading))
+        {
+            return pageHeading;
+        }
+
+        var titleFromApi = await ResolveTitleFromFallbacksAsync(productId, keyword, cancellationToken);
+        if (!string.IsNullOrWhiteSpace(titleFromApi))
+        {
+            return titleFromApi;
+        }
+
         var title = HtmlExtractMetaContent(html, "og:title")
             ?? HtmlExtractMetaContent(html, "twitter:title")
             ?? HtmlExtractMetaContent(html, "title")
@@ -131,8 +143,8 @@ public sealed class PchomeSearchService
             return normalized;
         }
 
-        _logger.LogWarning("商品 {ProductId} 無法從商品頁擷取標題，改用搜尋 API 嘗試。", productId);
-        return await ResolveTitleFromFallbacksAsync(productId, keyword, cancellationToken);
+        _logger.LogWarning("商品 {ProductId} 無法從商品頁與 API 擷取標題。", productId);
+        return null;
     }
 
     private async Task<string?> ResolveTitleFromFallbacksAsync(string productId, string keyword, CancellationToken cancellationToken)
@@ -352,6 +364,28 @@ public sealed class PchomeSearchService
         }
 
         return null;
+    }
+
+    private static string? HtmlExtractProductHeading(string html)
+    {
+        if (string.IsNullOrWhiteSpace(html))
+        {
+            return null;
+        }
+
+        var headingMatch = Regex.Match(
+            html,
+            "<h1\\b[^>]*>(?<value>.*?)</h1>",
+            RegexOptions.IgnoreCase | RegexOptions.Singleline);
+        if (!headingMatch.Success)
+        {
+            return null;
+        }
+
+        var text = Regex.Replace(headingMatch.Groups["value"].Value, "<[^>]+>", string.Empty);
+        text = WebUtility.HtmlDecode(text);
+        text = Regex.Replace(text, "\\s+", " ").Trim();
+        return string.IsNullOrWhiteSpace(text) ? null : text;
     }
 
     private static string? HtmlExtractJsonLdName(string html)
