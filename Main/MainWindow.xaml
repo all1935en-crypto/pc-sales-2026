@@ -201,7 +201,7 @@
                     </Border>
 
                     <CheckBox x:Name="AutoStartupCheckBox"
-                              Content="啟動時自動更新PC連結與排名"
+                              Content="啟動時自動更新PC連結、排名與標題"
                               FontSize="16"
                               Margin="0,4,0,0"
                               Foreground="#1C1C1E"

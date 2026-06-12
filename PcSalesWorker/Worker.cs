@@ -109,9 +109,11 @@ public sealed class Worker : BackgroundService
             var updatePcLinkOnly = string.Equals(updateMode, "pc-link", StringComparison.OrdinalIgnoreCase);
             var updateRankingOnly = string.Equals(updateMode, "ranking", StringComparison.OrdinalIgnoreCase);
             var updateSalesOnly = string.Equals(updateMode, "sales", StringComparison.OrdinalIgnoreCase);
+            var updateTitleOnly = string.Equals(updateMode, "title", StringComparison.OrdinalIgnoreCase);
             var restoreSales = string.Equals(updateMode, "restore-sales", StringComparison.OrdinalIgnoreCase);
+            _logger.LogInformation("更新模式：{UpdateMode}", updateMode);
             var updateAll = string.Equals(updateMode, "all", StringComparison.OrdinalIgnoreCase)
-                || (!updatePcLinkOnly && !updateRankingOnly && !updateSalesOnly && !restoreSales);
+                || (!updatePcLinkOnly && !updateRankingOnly && !updateSalesOnly && !updateTitleOnly && !restoreSales);
 
             if (restoreSales)
             {
@@ -139,6 +141,7 @@ public sealed class Worker : BackgroundService
             {
                 var shouldUpdateRanking = updateAll || updateRankingOnly;
                 var shouldUpdateSales = updateAll || updateSalesOnly;
+                var shouldUpdateTitle = updateAll || updateSalesOnly || updateTitleOnly;
                 var context = await _sheetService.LoadContextAsync(cancellationToken);
                 var rows = _sheetService.ExtractRows(context);
                 WriteProgress(new ProgressState
@@ -158,9 +161,13 @@ public sealed class Worker : BackgroundService
                 var titleIndex = _sheetService.ColumnIndex(context, _options.Columns.Title);
                 var salesIndex = _sheetService.ColumnIndex(context, _options.Columns.Sales30);
 
-                if (shouldUpdateSales && (urlColumn == null || titleColumn == null || salesColumn == null))
+                if (shouldUpdateTitle && (urlColumn == null || titleColumn == null))
                 {
-                    throw new InvalidOperationException("工作表缺少必要欄位，請確認欄位名稱。");
+                    throw new InvalidOperationException("工作表缺少網址或標題欄位，無法更新標題。");
+                }
+                if (shouldUpdateSales && salesColumn == null)
+                {
+                    throw new InvalidOperationException("工作表缺少 30日銷量 欄位，無法更新銷量。");
                 }
                 if (shouldUpdateRanking && rankingColumn == null)
                 {
@@ -196,7 +203,7 @@ public sealed class Worker : BackgroundService
                         }
                     }
 
-                    if (shouldUpdateSales)
+                    if (shouldUpdateTitle)
                     {
                         title = await _searchService.GetProductTitleRequiredAsync(row.ProductId, row.Keyword, cancellationToken);
                         if (string.IsNullOrWhiteSpace(title))
@@ -206,7 +213,10 @@ public sealed class Worker : BackgroundService
                             title = MissingTitleText;
                             titleIsError = true;
                         }
+                    }
 
+                    if (shouldUpdateSales)
+                    {
                         try
                         {
                             sales30 = await _backendService.GetSales30Async(row.ProductId, cancellationToken);
@@ -220,12 +230,15 @@ public sealed class Worker : BackgroundService
 
                     var productUrl = $"https://24h.pchome.com.tw/prod/{row.ProductId}";
 
-                    if (shouldUpdateSales)
+                    if (shouldUpdateTitle)
                     {
                         AddIfChanged(context, pendingUpdates, resolvedRowIndex, urlColumn, urlIndex, productUrl);
                         AddIfChanged(context, pendingUpdates, resolvedRowIndex, titleColumn, titleIndex, title ?? MissingTitleText);
-                        AddIfChanged(context, pendingUpdates, resolvedRowIndex, salesColumn, salesIndex, sales30.HasValue ? sales30.Value : string.Empty);
                         AddTitleTextColorUpdate(pendingTitleTextColorUpdates, resolvedRowIndex, titleIndex, titleIsError);
+                    }
+                    if (shouldUpdateSales)
+                    {
+                        AddIfChanged(context, pendingUpdates, resolvedRowIndex, salesColumn, salesIndex, sales30.HasValue ? sales30.Value : string.Empty);
                     }
                     if (shouldUpdateRanking && rankingColumn != null)
                     {

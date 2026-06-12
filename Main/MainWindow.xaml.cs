@@ -190,6 +190,7 @@ public partial class MainWindow : Window
 
         _startupQueue.Clear();
         _startupQueue.Enqueue(new StartupTask("ranking", $"啟動時自動更新：排名（最大頁數 {selected}）", selected));
+        _startupQueue.Enqueue(new StartupTask("title", "啟動時自動更新：標題", null));
         _startupQueue.Enqueue(new StartupTask("pc-link", "啟動時自動更新：PC連結", null));
         _autoStartupRunning = true;
         StartNextAutoStartupTask();
